@@ -284,3 +284,25 @@ def test_filing_listed_under_two_companies_does_not_flip(session_factory):
         assert changed == [0, 0]
         row = s.get(Filing, accn)
         assert row.cik == 19617 and "/data/19617/" in row.url
+
+
+def test_quarterly_series_derives_cited_q4_from_fixtures(tmp_path, session_factory, sec_client):
+    from analyst.metrics.quarters import DerivedPoint, quarterly_series
+
+    run(TICKERS, sec_client(), tmp_path / "raw", session_factory=session_factory)
+    with session_factory() as s:
+        pts = quarterly_series(s, 789019, "revenue")  # MSFT, fiscal year ends June 30
+        derived = [p for p in pts if isinstance(p, DerivedPoint)]
+        assert derived, "expected derived Q4s"
+        for d in derived:
+            fy, *qs = d.inputs
+            assert d.value == fy.value - sum(q.value for q in qs)
+            assert d.fiscal_quarter == 4 and d.period_end.month == 6
+            for i in d.inputs:  # every input resolves to a stored fact with that value
+                assert s.get(Fact, i.fact_id).value == i.value
+        labels = [(p.fiscal_year, p.fiscal_quarter) for p in pts]
+        assert len(labels) == len(set(labels))
+        assert "derived: FY - (Q1 + Q2 + Q3)" in show(s, "MSFT", "revenue", "Q")
+        assert not [
+            p for p in quarterly_series(s, 789019, "eps_diluted") if isinstance(p, DerivedPoint)
+        ]

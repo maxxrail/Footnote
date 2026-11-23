@@ -218,3 +218,46 @@ def test_fy_one_point_per_year_when_end_dates_disagree():
     for order in ([a, b], [b, a]):
         [p] = select_series(order, "revenue")
         assert (p.fiscal_year, p.accession) == (2008, "g-11")
+
+
+@pytest.mark.parametrize(
+    ("end", "fye", "expected"),
+    [
+        (D(2025, 9, 30), "0630", (2026, 1)),  # Microsoft: Jul-Sep 2025 is FY2026 Q1
+        (D(2026, 3, 31), "0630", (2026, 3)),
+        (D(2025, 6, 30), "0630", (2025, 4)),
+        (D(2024, 12, 28), "0925", (2025, 1)),  # Apple, 52/53-week
+        (D(2025, 4, 27), "0131", (2026, 1)),  # NVIDIA
+        (D(2025, 3, 31), "1231", (2025, 1)),  # calendar year
+        (D(2026, 1, 3), "1226", (2025, 4)),  # 53-week year ending in January
+        (D(2025, 8, 15), None, (2025, 3)),  # unknown FYE: calendar quarters
+    ],
+)
+def test_fiscal_period(end, fye, expected):
+    from analyst.edgar.concepts import fiscal_period
+
+    assert fiscal_period(end, fye) == expected
+
+
+def test_q_points_carry_fiscal_labels():
+    f = fact(REV, 1, D(2025, 7, 1), D(2025, 9, 30), form="10-Q")
+    [p] = select_series([f], "revenue", "Q", fiscal_year_end="0630")
+    assert (p.fiscal_year, p.fiscal_quarter) == (2026, 1)
+
+
+def test_q_instants_include_year_end_balance_from_10k():
+    facts = [
+        fact("us-gaap:Assets", 1, None, D(2025, 3, 31), form="10-Q"),
+        fact("us-gaap:Assets", 2, None, D(2025, 6, 30), form="10-K"),  # Q4 = FY-end balance
+    ]
+    pts = select_series(facts, "total_assets", "Q", fiscal_year_end="0630")
+    assert [(p.fiscal_quarter, p.value, p.form) for p in pts] == [(3, 1, "10-Q"), (4, 2, "10-K")]
+
+
+def test_q_one_point_per_fiscal_quarter_when_end_dates_disagree():
+    """NVIDIA tagged FY2008 year-end cash as 2008-01-25 in a 10-Q and 01-27 in a 10-K."""
+    cash = "us-gaap:CashAndCashEquivalentsAtCarryingValue"
+    a = fact(cash, 7, None, D(2008, 1, 25), form="10-Q", accn="n-09", filed=D(2009, 3, 1))
+    b = fact(cash, 7, None, D(2008, 1, 27), form="10-K", accn="n-11", filed=D(2011, 3, 1))
+    [p] = select_series([a, b], "cash", "Q", fiscal_year_end="0127")
+    assert (p.fiscal_year, p.fiscal_quarter, p.accession) == (2008, 4, "n-11")

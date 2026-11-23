@@ -10,10 +10,14 @@ Selection rules (see `select_series`):
 - FY: facts from annual forms (10-K, 10-K/A). Duration items need a 350-380 day period.
   Instant items (balance sheet) need a period end within 7 days of the company's fiscal
   year end (52/53-week years drift by a few days).
-- Q: facts from 10-Q (and 10-Q/A). Duration items need a 80-100 day period, so only
-  discretely reported quarters are returned: year-to-date cash-flow figures are skipped,
-  and Q4 is never derived here, because derived numbers are arithmetic and belong in
-  `analyst/metrics/` (Part 3).
+- Q: duration items come from 10-Q (and 10-Q/A) facts with a 80-100 day period, so only
+  discretely reported quarters are returned. Year-to-date cash-flow figures are skipped.
+  Q4 is not in any 10-Q; `analyst.metrics.quarters` derives it (FY - Q1 - Q2 - Q3) with
+  a citation to all four facts, because derived numbers are arithmetic. Balance-sheet
+  instants at fiscal quarter ends also come from 10-Ks, so the Q4 balance is reported, not
+  derived.
+- Labels: Q points carry the company's own fiscal year and quarter (Microsoft's
+  2025-07-01..2025-09-30 is FY2026 Q1), computed from its fiscal year end.
 - Restatements: the same period is reported again in later filings; the latest filing
   (by filed date, then accession) wins, and its fact id and accession are returned.
 """
@@ -41,12 +45,19 @@ class CanonicalConcept:
     unit: str
     instant: bool = False  # balance-sheet item measured at a point in time
     description: str = ""
+    # Quarters sum to the year, so Q4 = FY - (Q1+Q2+Q3) is valid. Not for per-share values.
+    additive: bool = True
 
 
 def _c(
-    name: str, unit: str, *candidates: str, instant: bool = False, desc: str = ""
+    name: str,
+    unit: str,
+    *candidates: str,
+    instant: bool = False,
+    desc: str = "",
+    additive: bool = True,
 ) -> CanonicalConcept:
-    return CanonicalConcept(name, tuple(candidates), unit, instant, desc)
+    return CanonicalConcept(name, tuple(candidates), unit, instant, desc, additive)
 
 
 CONCEPTS: dict[str, CanonicalConcept] = {
@@ -73,7 +84,13 @@ CONCEPTS: dict[str, CanonicalConcept] = {
             "us-gaap:NetIncomeLossAvailableToCommonStockholdersBasic",
             desc="Net income attributable to the parent",
         ),
-        _c("eps_diluted", "USD/shares", "us-gaap:EarningsPerShareDiluted", desc="Diluted EPS"),
+        _c(
+            "eps_diluted",
+            "USD/shares",
+            "us-gaap:EarningsPerShareDiluted",
+            desc="Diluted EPS",
+            additive=False,  # share counts differ by quarter; Q4 EPS can't be subtracted
+        ),
         _c("total_assets", "USD", "us-gaap:Assets", instant=True, desc="Total assets"),
         _c(
             "total_liabilities",
@@ -174,6 +191,7 @@ class SeriesPoint:
     accession: str
     form: str
     filed_at: dt.date
+    fiscal_quarter: int | None = None  # 1-4 for Q points, None for FY
 
 
 def _near_fiscal_year_end(day: dt.date, fiscal_year_end: str) -> bool:
@@ -207,10 +225,43 @@ def fiscal_year_label(period_end: dt.date) -> int:
     return period_end.year
 
 
+def _anchor(year: int, fiscal_year_end: str) -> dt.date:
+    month, dom = int(fiscal_year_end[:2]), int(fiscal_year_end[2:])
+    try:
+        return dt.date(year, month, dom)
+    except ValueError:  # 0229 in a non-leap year
+        return dt.date(year, month, 28)
+
+
+def fiscal_period(period_end: dt.date, fiscal_year_end: str | None) -> tuple[int, int]:
+    """(fiscal year, fiscal quarter 1-4) of a quarter ending on `period_end`.
+
+    The fiscal year is the one whose year end is the first on or after `period_end` (allowing
+    ~45 days of drift), labelled like FY series. The quarter counts back from that
+    year end in ~91-day steps. Without a fiscal year end, calendar quarters are used.
+    """
+    if not fiscal_year_end:
+        return fiscal_year_label(period_end), (period_end.month - 1) // 3 + 1
+    # Half a quarter: a fiscal year end can't be further than ~45 days from a quarter end
+    # that belongs to it, even when a 53-week year drifts past the stored MMDD.
+    floor = period_end - dt.timedelta(days=45)
+    anchor = min(
+        a
+        for a in (
+            _anchor(y, fiscal_year_end) for y in range(period_end.year - 1, period_end.year + 2)
+        )
+        if a >= floor
+    )
+    quarters_left = round((anchor - period_end).days / 91.31)
+    return fiscal_year_label(anchor), min(4, max(1, 4 - quarters_left))
+
+
 def _period_ok(
     f: FactRecord, concept: CanonicalConcept, period: Period, fiscal_year_end: str | None
 ) -> bool:
     forms = ANNUAL_FORMS if period == "FY" else QUARTERLY_FORMS
+    if period == "Q" and concept.instant:
+        forms = QUARTERLY_FORMS | ANNUAL_FORMS  # the 10-K reports the Q4 (year-end) balance
     if f.form not in forms or f.unit != concept.unit:
         return False
     if concept.instant:
@@ -243,33 +294,43 @@ def select_series(
         # the fact id makes the choice deterministic for exact ties.
         return (f.filed_at, f.accession, -priority[f.concept], f.fact_id)
 
-    # FY points are keyed by fiscal year, not exact end date: filers sometimes tag the same
-    # year with ends a few days apart (GS FY2008: 2008-11-28 in one 10-K, 11-30 in the next).
+    # Points are keyed by fiscal year (and quarter), not exact end date: filers sometimes tag
+    # the same period with ends a few days apart (GS FY2008: 2008-11-28 in one 10-K, 11-30 in
+    # the next; NVIDIA's FY2008 year-end cash: 2008-01-25 and 2008-01-27).
     best: dict[object, FactRecord] = {}
     for f in facts:
         if f.concept not in priority or not _period_ok(f, concept, period, fiscal_year_end):
             continue
-        key = fiscal_year_label(f.period_end) if period == "FY" else f.period_end
+        fy_key = fiscal_year_label(f.period_end)
+        key = fy_key if period == "FY" else fiscal_period(f.period_end, fiscal_year_end)
         cur = best.get(key)
         if cur is None or rank(f) > rank(cur):
             best[key] = f
 
-    return [
-        SeriesPoint(
-            canonical=canonical,
-            period_start=f.period_start,
-            period_end=f.period_end,
-            fiscal_year=fiscal_year_label(f.period_end),
-            value=f.value,
-            unit=f.unit,
-            concept=f.concept,
-            fact_id=f.fact_id,
-            accession=f.accession,
-            form=f.form,
-            filed_at=f.filed_at,
+    out = []
+    for f in sorted(best.values(), key=lambda f: f.period_end):
+        if period == "FY":
+            fy, fq = fiscal_year_label(f.period_end), None
+        else:
+            fy, q = fiscal_period(f.period_end, fiscal_year_end)
+            fq = q
+        out.append(
+            SeriesPoint(
+                canonical=canonical,
+                period_start=f.period_start,
+                period_end=f.period_end,
+                fiscal_year=fy,
+                value=f.value,
+                unit=f.unit,
+                concept=f.concept,
+                fact_id=f.fact_id,
+                accession=f.accession,
+                form=f.form,
+                filed_at=f.filed_at,
+                fiscal_quarter=fq,
+            )
         )
-        for f in sorted(best.values(), key=lambda f: f.period_end)
-    ]
+    return out
 
 
 def load_fact_records(session: Session, cik: int, concepts: Sequence[str]) -> list[FactRecord]:

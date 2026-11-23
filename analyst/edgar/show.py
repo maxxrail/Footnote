@@ -1,7 +1,10 @@
 """Print a canonical series for one company, with the filing behind every value.
 
 uv run python -m analyst.edgar.show AAPL revenue
-uv run python -m analyst.edgar.show MSFT eps_diluted --period Q
+uv run python -m analyst.edgar.show MSFT revenue --period Q
+
+Quarterly rows are labelled with the company's fiscal year and quarter. A derived Q4 row
+(FY - Q1 - Q2 - Q3, computed in analyst.metrics.quarters) cites the four facts it used.
 """
 
 from __future__ import annotations
@@ -16,24 +19,44 @@ from sqlalchemy.orm import Session
 from analyst.db.models import Company
 from analyst.db.session import session_scope
 from analyst.edgar.concepts import CONCEPTS, SeriesPoint, get_series
+from analyst.metrics.quarters import DerivedPoint, quarterly_series
 
 
-def format_table(company: Company, canonical: str, points: Sequence[SeriesPoint]) -> str:
-    header = f"{company.ticker}  {company.name}  (CIK {company.cik})  {canonical}"
-    cols = ("Year", "Period", "Value", "Unit", "Concept", "Form", "Accession", "Fact id")
-    rows = [
-        (
-            str(p.fiscal_year),
-            f"{p.period_start or ''}..{p.period_end}",
+def _label(p: SeriesPoint | DerivedPoint) -> str:
+    return f"FY{p.fiscal_year}" + (f" Q{p.fiscal_quarter}" if p.fiscal_quarter else "")
+
+
+def _row(p: SeriesPoint | DerivedPoint) -> tuple[str, ...]:
+    period = f"{p.period_start or ''}..{p.period_end}"
+    if isinstance(p, DerivedPoint):
+        return (
+            _label(p),
+            period,
             f"{p.value:,}",
             p.unit,
-            p.concept,
-            p.form,
-            p.accession,
-            str(p.fact_id),
+            f"derived: {p.method}",
+            "calc",
+            p.inputs[0].accession,
+            ",".join(str(i.fact_id) for i in p.inputs),
         )
-        for p in points
-    ]
+    return (
+        _label(p),
+        period,
+        f"{p.value:,}",
+        p.unit,
+        p.concept,
+        p.form,
+        p.accession,
+        str(p.fact_id),
+    )
+
+
+def format_table(
+    company: Company, canonical: str, points: Sequence[SeriesPoint | DerivedPoint]
+) -> str:
+    header = f"{company.ticker}  {company.name}  (CIK {company.cik})  {canonical}"
+    cols = ("Fiscal", "Period", "Value", "Unit", "Concept", "Form", "Accession", "Fact id(s)")
+    rows = [_row(p) for p in points]
     widths = [
         max(len(c), *(len(r[i]) for r in rows)) if rows else len(c) for i, c in enumerate(cols)
     ]
@@ -54,7 +77,11 @@ def show(session: Session, ticker: str, canonical: str, period: str = "FY") -> s
     company = session.scalar(select(Company).where(Company.ticker == ticker.upper()))
     if company is None:
         raise SystemExit(f"{ticker} is not in the database; run analyst.edgar.ingest first")
-    points = get_series(session, company.cik, canonical, period)  # type: ignore[arg-type]
+    points: Sequence[SeriesPoint | DerivedPoint]
+    if period == "Q":
+        points = quarterly_series(session, company.cik, canonical)
+    else:
+        points = get_series(session, company.cik, canonical, "FY")
     if not points:
         return f"No {period} values for {canonical} for {company.ticker} in the corpus."
     return format_table(company, canonical, points)
