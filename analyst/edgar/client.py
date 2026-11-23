@@ -16,6 +16,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -152,7 +153,8 @@ class SecClient:
         return body
 
     def get_json(self, url: str, refresh: bool = False) -> Any:
-        return json.loads(self.get_bytes(url, refresh=refresh))
+        # Decimal, not float: reported values must round-trip exactly into NUMERIC columns.
+        return json.loads(self.get_bytes(url, refresh=refresh), parse_float=Decimal)
 
     def _fetch(self, url: str) -> bytes:
         attempt = 0

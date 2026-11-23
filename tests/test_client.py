@@ -24,6 +24,7 @@ class FakeClock:
 
 
 def make_client(tmp_path: Path, handler, **kw) -> SecClient:
+    kw.setdefault("limiter", TokenBucket(1e6, sleep=lambda s: None))
     return SecClient(
         UA, tmp_path, transport=httpx.MockTransport(handler), sleep=lambda s: None, **kw
     )

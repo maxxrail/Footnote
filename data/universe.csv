@@ -1,0 +1,26 @@
+ticker,name,peer_group
+AAPL,Apple,mega_cap_tech_software
+MSFT,Microsoft,mega_cap_tech_software
+ORCL,Oracle,mega_cap_tech_software
+CRM,Salesforce,mega_cap_tech_software
+ADBE,Adobe,mega_cap_tech_software
+NOW,ServiceNow,mega_cap_tech_software
+INTU,Intuit,mega_cap_tech_software
+WDAY,Workday,mega_cap_tech_software
+ADSK,Autodesk,mega_cap_tech_software
+NVDA,NVIDIA,semiconductors
+AMD,Advanced Micro Devices,semiconductors
+INTC,Intel,semiconductors
+AVGO,Broadcom,semiconductors
+QCOM,Qualcomm,semiconductors
+TXN,Texas Instruments,semiconductors
+MU,Micron Technology,semiconductors
+ADI,Analog Devices,semiconductors
+JPM,JPMorgan Chase,us_banks
+BAC,Bank of America,us_banks
+WFC,Wells Fargo,us_banks
+C,Citigroup,us_banks
+GS,Goldman Sachs,us_banks
+MS,Morgan Stanley,us_banks
+USB,U.S. Bancorp,us_banks
+PNC,PNC Financial Services,us_banks
