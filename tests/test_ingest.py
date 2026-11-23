@@ -249,3 +249,25 @@ def test_older_submission_pages_fetched_until_documents_covered(tmp_path):
         "q1.htm",
         "q0.htm",
     ]
+
+
+def test_filing_listed_under_two_companies_does_not_flip(session_factory):
+    """Real case: JPM-filed notes referencing ADI are in both companies' submissions."""
+    shared = {
+        "accession": "0000019617-25-000610",
+        "form": "424B2",
+        "filed_at": dt.date(2025, 6, 1),
+        "period_of_report": None,
+        "primary_doc": "x.htm",
+        "url": "u",
+    }
+    with session_factory() as s:
+        for cik in (19617, 6281):
+            upsert(s, Company.__table__, [{"cik": cik, "ticker": str(cik), "name": "n"}], ["cik"])
+        for _ in range(2):  # two full runs: JPM then ADI each time
+            changed = [
+                upsert(s, Filing.__table__, [{**shared, "cik": cik}], ["accession"], keep=["cik"])
+                for cik in (19617, 6281)
+            ]
+        assert changed == [0, 0]
+        assert s.get(Filing, shared["accession"]).cik == 19617

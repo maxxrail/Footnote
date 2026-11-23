@@ -69,14 +69,18 @@ def upsert(
     rows: Sequence[dict[str, Any]],
     key: Sequence[str],
     update: bool = True,
+    keep: Sequence[str] = (),
 ) -> int:
-    """Insert rows; on key conflict update only if a value differs. Returns rows changed."""
+    """Insert rows; on key conflict update only if a value differs. Returns rows changed.
+
+    Columns in `keep` are written on insert and never overwritten on conflict.
+    """
     table = cast(Table, model_table)
     changed = 0
     for i in range(0, len(rows), CHUNK):
         chunk = rows[i : i + CHUNK]
         stmt = insert(table).values(list(chunk))
-        cols = [c for c in chunk[0] if c not in key]
+        cols = [c for c in chunk[0] if c not in key and c not in keep]
         if update and cols:
             stmt = stmt.on_conflict_do_update(
                 index_elements=list(key),
@@ -234,7 +238,9 @@ def ingest_company(
     filings = all_filing_rows(client, cik, sub, refresh)
     facts = fact_rows(cik, client.companyfacts(cik, refresh=refresh))
     stubs = stub_filings(cik, facts, {f["accession"] for f in filings})
-    counts.filings = upsert(session, Filing.__table__, filings, ["accession"])
+    # A filing can be listed under several companies (JPM-issued notes linked to ADI appear
+    # in both submissions). The first company to list it owns it, so re-runs don't flip cik.
+    counts.filings = upsert(session, Filing.__table__, filings, ["accession"], keep=["cik"])
     # Stubs never overwrite a full row that a later submissions page may have written.
     counts.filings += upsert(session, Filing.__table__, stubs, ["accession"], update=False)
 
