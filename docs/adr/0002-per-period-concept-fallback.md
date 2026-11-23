@@ -15,8 +15,8 @@ this into one clean value per period, traceable to one fact.
 
 1. **First candidate with any data, for all periods**: simple and consistent within a series,
    but it silently drops every year reported under a different tag.
-2. **Per-period fallback**: for each period, use the highest-priority candidate that has a
-   value. Continuous series, but adjacent years may come from different tags (the tag is
+2. **Per-period fallback**: for each period, take the value from the latest filing, and use
+   tag priority to choose between tags inside that filing. Continuous series, but adjacent years may come from different tags (the tag is
    returned with every point, so this is visible).
 3. **Hand-curated per-company mapping**: most precise, but doesn't scale past the universe
    and needs upkeep.
@@ -34,7 +34,10 @@ Other rules, all unit-tested and mutation-checked:
   within 7 days of the company's fiscal year end (52/53-week years drift).
 - Q = 10-Q facts with 80-100 day durations. Year-to-date figures are skipped and Q4 is not
   derived, because deriving is arithmetic and belongs in `analyst/metrics/` (Part 3).
-- Restatements: the latest filing (filed date, then accession) wins.
+- Restatements: the latest filing (filed date, then accession) wins, **even across a tag
+  change**. An earlier draft did priority first and kept a stale value when a company restated
+  under a new tag; the part-reviewer caught it. FY points are keyed by fiscal year because
+  GS tagged FY2008 with two end dates (11-28 and 11-30).
 
 ## Consequences
 

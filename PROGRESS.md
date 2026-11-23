@@ -22,6 +22,12 @@
 - P1: A filing listed under two companies (JPM's 13G on ADI) keeps the first company's `cik`/`url`, so re-runs don't flip it.
 - P1: Older submissions pages are followed only until 3 10-Ks + 4 10-Qs are found (needed for GS, MS and other banks).
 - P1: `SeriesPoint.fiscal_year` = calendar year of `period_end` (matches AAPL/MSFT/NVDA naming). Facts' own `fy`/`fp` belong to the reporting filing and are stored but not used for labels.
+- P1: Per period, the **latest filing wins first** and tag priority only breaks ties inside one filing, so a restatement under a new tag beats the original under an old tag (review finding).
+- P1: FY points are keyed by fiscal year, because GS tagged FY2008 as ending both 2008-11-28 and 2008-11-30. A year ending in the first week of January is labelled the prior year.
+- P1: Instants: FY needs the fiscal year end ±7 days and Q needs a fiscal quarter end ±7 days. If the fiscal year end is unknown, instants are refused.
+- P1: `shares_outstanding` uses only `us-gaap:CommonStockSharesOutstanding`. The dei cover-page count is measured weeks later and never matched a period end.
+- P1: The SEC client follows redirects itself, so every hop is rate-limited and counted. `rate` must be < 10.
+- P1: Tests have an autouse guard that blocks any socket connect except loopback.
 - P1: Q series = discrete 80-100 day 10-Q facts only. No YTD, no derived Q4 (that's arithmetic → `analyst/metrics/`, Part 3).
 - P1: Missing items are not derived (e.g. 5/25 companies don't tag `Liabilities`; banks have no `GrossProfit`). `get_series` returns empty.
 - P1: XBRL values are parsed as `Decimal` (`json.loads(parse_float=Decimal)`), never float.
@@ -44,11 +50,12 @@ No new upgrade operations detected.
 
 **2. `uv run pytest -q` passes; `uv run ruff check .` clean: PASS**
 ```
-57 passed in 7.24s
+72 passed in 7.79s
 All checks passed!
 36 files already formatted
 Success: no issues found in 19 source files   (mypy)
 ```
+(Re-run after the review fixes: 72 passed, ruff/format/mypy clean.)
 
 **3. Live ingest of `data/universe.csv` finishes; second run makes 0 SEC requests and changes 0 rows: PASS**
 ```
@@ -69,6 +76,8 @@ FY    Period                            Value  Unit  Concept                    
 2007  2006-10-01..2007-09-29   24,578,000,000  USD   us-gaap:SalesRevenueNet                                      10-K/A  0001193125-10-012091  21268
 ...   (20 fiscal years, 2007-2026, all with accession numbers)
 2016  2015-09-27..2016-09-24  215,639,000,000  USD   us-gaap:Revenues                                             10-K    0000320193-18-000145  21256
+2017  2016-09-25..2017-09-30  229,234,000,000  USD   us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax  10-K    0000320193-19-000119  21136
+2018  2017-10-01..2018-09-29  265,595,000,000  USD   us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax  10-K    0000320193-20-000096  21146
 2019  2018-09-30..2019-09-28  260,174,000,000  USD   us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax  10-K    0000320193-21-000105  21166
 2024  2023-10-01..2024-09-28  391,035,000,000  USD   us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax  10-K    0000320193-26-000026  21237
 2025  2024-09-29..2025-09-27  416,161,000,000  USD   us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax  10-K    0000320193-26-000026  21249
@@ -82,7 +91,7 @@ it was not compared visually against the rendered page on sec.gov.
 
 **5. README has a "Part 1" section: PASS**: see README.md → "Part 1: Financial data layer".
 
-**Mutation checks** (`uv run python scripts/mutation_check.py`): 12/12 guarantees, each broken on purpose and caught by a failing test.
+**Mutation checks** (`uv run python scripts/mutation_check.py`): 16/16 guarantees, each broken on purpose and caught by a failing test (final run after the review fixes).
 ```
 CAUGHT | idempotent upsert (drop IS DISTINCT FROM guard) | 2 failed
 CAUGHT | instant facts unique (drop NULLS NOT DISTINCT) | 1 failed
@@ -92,13 +101,32 @@ CAUGHT | User-Agent header (dropped) | 1 failed
 CAUGHT | retry on 429/5xx (none) | 3 failed
 CAUGHT | restatement de-dupe (keep oldest) | 1 failed
 CAUGHT | candidate fallback order (lowest priority wins) | 1 failed
+CAUGHT | client uses the rate limiter (skip acquire) | 1 failed
+CAUGHT | redirects rate-limited (let httpx follow them) | 1 failed
+CAUGHT | Q instants on quarter ends (accept any instant) | 1 failed
+CAUGHT | one FY point per fiscal year (key by exact end date) | 1 failed
 CAUGHT | FY duration filter (accept any duration) | 1 failed
 CAUGHT | Q duration filter (accept YTD) | 1 failed
 CAUGHT | shared filing keeps cik/url (keep nothing) | 1 failed
 CAUGHT | older submission pages (never follow) | 1 failed
 ```
-The first pass missed 2: the FY filter test passed by input order, and the shared-filing test bypassed the
-ingest call site. Both tests were fixed before the final pass.
+Earlier passes missed 3 mutations, and each test was fixed: the FY and Q filter tests passed because of input
+order, and the shared-filing test bypassed the ingest call site.
+
+**part-reviewer findings and what was done**
+| # | Finding | Action |
+|---|---|---|
+| 1 | Restatement lost when the restated value is under a lower-priority tag | Fixed: the latest filing ranks first. New test and mutation. AAPL FY2017-18 now cite the 2019/2020 10-Ks (same values). |
+| 2 | Q instants unfiltered; dei cover-page date showed up as a "quarter" | Fixed: Q instants must sit on a fiscal quarter end. dei fallback removed. |
+| 3 | No test that the client calls the limiter | Fixed: counting-limiter test and mutation. |
+| 4 | Redirect hops skipped the limiter | Fixed: redirects followed manually through the limiter. |
+| 5 | First-week-of-January year ends mislabelled | Fixed: `fiscal_year_label`. |
+| 6 | No fiscal year end → mid-year instants; same-end tie order-dependent | Fixed: refuse instants; deterministic rank. Also found GS duplicate FY2008 → key FY by year. |
+| 7 | Shared-filing owner depends on ingest order | Accepted, documented in ADR 0001 (facts are unaffected). |
+| 8 | `rate == 10` allowed | Fixed: must be < 10. |
+| 9 | `show` column said "FY" in Q mode | Fixed: "Year". |
+| 10 | No global network block in tests | Fixed: autouse guard plus a test for it. |
+| 11 | `%` in DATABASE_URL breaks alembic configparser | Fixed: escaped. |
 
 **FY coverage 2021+ (points per company × canonical item)**: 25/25 companies have ≥ 4 years of
 revenue, net income, EPS, assets, cash and operating cash flow. The gaps are real absences in the
