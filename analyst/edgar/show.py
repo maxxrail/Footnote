@@ -43,7 +43,7 @@ def format_table(company: Company, canonical: str, points: Sequence[SeriesPoint]
         return "  ".join(
             c.rjust(w) if i in right else c.ljust(w)
             for i, (c, w) in enumerate(zip(cells, widths, strict=True))
-        )
+        ).rstrip()
 
     out = [header, line(cols), line(["-" * w for w in widths])]
     out += [line(r) for r in rows]
