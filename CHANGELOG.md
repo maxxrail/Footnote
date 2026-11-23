@@ -20,7 +20,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   restatement uses a different tag).
 - `python -m analyst.edgar.ingest`: idempotent ingest (`--tickers`, `--universe`,
   `--refresh`, `--no-docs`). Downloads the last 3 10-K and 4 10-Q primary documents.
-- `python -m analyst.edgar.show TICKER ITEM [--period Q]`.
+- `python -m analyst.edgar.show TICKER ITEM [--period Q]`. Quarterly rows are labelled with the
+  company's fiscal year and quarter (e.g. `FY2026 Q1`).
+- `analyst/metrics/quarters.py`: derived Q4 = FY − (Q1+Q2+Q3) for additive flow items. It cites
+  all four input facts and refuses for EPS or when a quarter is missing.
+
+### Fixed
+- CI and evals workflows failed to parse (`hashFiles()` in a job-level `if:`). They now use gate jobs.
 - `data/universe.csv`: 25 companies in 3 peer groups (tech/software, semis, US banks).
 - Recorded AAPL/MSFT fixtures, 72 offline tests (sockets blocked except loopback), `scripts/mutation_check.py`,
   `scripts/record_fixtures.py`, ADRs 0001-0002.

@@ -28,8 +28,10 @@
 - P1: `shares_outstanding` uses only `us-gaap:CommonStockSharesOutstanding`. The dei cover-page count is measured weeks later and never matched a period end.
 - P1: The SEC client follows redirects itself, so every hop is rate-limited and counted. `rate` must be < 10.
 - P1: Tests have an autouse guard that blocks any socket connect except loopback.
-- P1: Q series = discrete 80-100 day 10-Q facts only. No YTD, no derived Q4 (that's arithmetic → `analyst/metrics/`, Part 3).
-- P1: Missing items are not derived (e.g. 5/25 companies don't tag `Liabilities`; banks have no `GrossProfit`). `get_series` returns empty.
+- P1: Q series = discrete 80-100 day 10-Q facts, no YTD. Labelled with the company's **fiscal** year and quarter (`fiscal_period`; MSFT Jul–Sep 2025 = FY2026 Q1). Points are keyed by fiscal quarter, because NVDA tagged one year end as 01-25 and 01-27.
+- P1 (Maxx asked for it after review): **Q4 is derived** in `analyst/metrics/quarters.py` as FY − (Q1+Q2+Q3), only for additive flow items, and only when Q1–Q3 tile the fiscal year. The result cites the FY fact and all three quarter facts. It is never derived for EPS or when a quarter is missing. Q4 balance-sheet values are the 10-K year-end balance (reported, not derived). Live: 1,483 derived Q4 points. MSFT FY2025 Q4 revenue = 76,441M, matching the $76.4B Microsoft reported.
+- P1: CI workflows used `hashFiles()` in job-level `if:`, which GitHub rejects, so both workflows failed to parse. A gate job now checks for the file and the real job reads its output. The `pyproject.toml` gate was removed because that file now exists.
+- P1: Missing line items are not derived (e.g. 5/25 companies don't tag `Liabilities`; banks have no `GrossProfit`). `get_series` returns empty for them.
 - P1: XBRL values are parsed as `Decimal` (`json.loads(parse_float=Decimal)`), never float.
 - P1: DB tests run in a throwaway Postgres schema per session. They skip locally if Postgres is down and fail in CI (`CI` env var).
 - P1: Fixtures (`tests/fixtures/`, ~900 KB) are AAPL + MSFT, trimmed to canonical concepts since 2016. Re-record with `uv run python scripts/record_fixtures.py`.
@@ -55,7 +57,7 @@ All checks passed!
 36 files already formatted
 Success: no issues found in 19 source files   (mypy)
 ```
-(Re-run after the review fixes: 72 passed, ruff/format/mypy clean.)
+(Re-run after the review fixes: 72 passed. After adding fiscal-quarter labels and derived Q4: **92 passed**, ruff/format/mypy clean.)
 
 **3. Live ingest of `data/universe.csv` finishes; second run makes 0 SEC requests and changes 0 rows: PASS**
 ```
@@ -91,7 +93,7 @@ it was not compared visually against the rendered page on sec.gov.
 
 **5. README has a "Part 1" section: PASS**: see README.md → "Part 1: Financial data layer".
 
-**Mutation checks** (`uv run python scripts/mutation_check.py`): 16/16 guarantees, each broken on purpose and caught by a failing test (final run after the review fixes).
+**Mutation checks** (`uv run python scripts/mutation_check.py`): **22/22** guarantees, each broken on purpose and caught by a failing test. The final run, after adding Q4, added 6 cases: Q4 arithmetic, the contiguity check, no-EPS, fiscal labels, the 10-K Q4 balance, and fiscal-quarter keying.
 ```
 CAUGHT | idempotent upsert (drop IS DISTINCT FROM guard) | 2 failed
 CAUGHT | instant facts unique (drop NULLS NOT DISTINCT) | 1 failed

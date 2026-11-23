@@ -35,6 +35,9 @@ provenance: concept, period, unit, filing accession and a fact id.
   map to ordered candidate tags. `get_series(session, cik, "revenue", "FY")` returns one
   value per period, from annual 10-K facts with ~365-day durations. When a value was
   restated, the latest filing wins. Each point carries its fact id and accession.
+- **Quarters**: `--period Q` labels rows with the company's own fiscal year and quarter.
+  Q4 isn't in any 10-Q, so for flow items like revenue it is derived as FY − (Q1+Q2+Q3) in
+  `analyst/metrics/quarters.py`, with all four source facts cited. It is never derived for EPS.
 - **Ingest** is idempotent: upserts write only rows whose values changed. It also saves
   the last 3 10-K and 4 10-Q documents to `data/raw/filings/` for Part 2.
 

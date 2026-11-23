@@ -34,12 +34,27 @@ permissions:
   pull-requests: write # to post the score table
 
 jobs:
+  has-runner:
+    # hashFiles() isn't allowed in a job-level `if:`, so this job checks for the file
+    # and the real job reads its output.
+    name: Check for analyst/evals/run.py
+    runs-on: ubuntu-latest
+    outputs:
+      present: ${{ steps.check.outputs.present }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: check
+        run: |
+          if [ -f "analyst/evals/run.py" ]; then echo "present=true" >> "$GITHUB_OUTPUT"
+          else echo "present=false" >> "$GITHUB_OUTPUT"; fi
+
   evals:
     name: Eval suite (real model)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     # Part 5 adds the runner.
-    if: ${{ hashFiles('analyst/evals/run.py') != '' }}
+    needs: has-runner
+    if: needs.has-runner.outputs.present == 'true'
     services:
       postgres:
         image: pgvector/pgvector:pg16
