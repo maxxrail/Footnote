@@ -27,6 +27,7 @@ log = logging.getLogger(__name__)
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
+SUBMISSIONS_PAGE_URL = "https://data.sec.gov/submissions/{name}"  # older filings
 COMPANYFACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 ARCHIVES_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession_nodash}/{doc}"
 
@@ -192,6 +193,12 @@ class SecClient:
 
     def submissions(self, cik: int, refresh: bool = False) -> Any:
         return self.get_json(SUBMISSIONS_URL.format(cik=pad_cik(cik)), refresh=refresh)
+
+    def submissions_page(self, name: str, refresh: bool = False) -> Any:
+        """An older-filings page listed in submissions["filings"]["files"]."""
+        if "/" in name or not name.endswith(".json"):
+            raise ValueError(f"unexpected submissions page name {name!r}")
+        return self.get_json(SUBMISSIONS_PAGE_URL.format(name=name), refresh=refresh)
 
     def companyfacts(self, cik: int, refresh: bool = False) -> Any:
         return self.get_json(COMPANYFACTS_URL.format(cik=pad_cik(cik)), refresh=refresh)

@@ -196,3 +196,56 @@ def test_universe_csv_has_three_peer_groups_of_about_25():
         groups = {r["peer_group"] for r in csv.DictReader(fh)}
     assert 20 <= len(tickers) <= 30 and len(set(tickers)) == len(tickers)
     assert len(groups) == 3
+
+
+def test_older_submission_pages_fetched_until_documents_covered(tmp_path):
+    """GS/MS-style: 'recent' holds 1 10-K; older 10-Ks are on extra pages."""
+    import httpx
+
+    from analyst.edgar.client import SecClient, TokenBucket
+    from analyst.edgar.ingest import all_filing_rows
+
+    def block(*rows):
+        cols = ("accessionNumber", "filingDate", "reportDate", "form", "primaryDocument")
+        return {c: [r[i] for r in rows] for i, c in enumerate(cols)}
+
+    recent = block(
+        ("0000000001-26-000001", "2026-02-01", "2025-12-31", "10-K", "k25.htm"),
+        *[
+            (f"0000000001-26-00001{i}", f"2026-0{i + 4}-01", "", "10-Q", f"q{i}.htm")
+            for i in range(4)
+        ],
+        ("0000000001-26-000099", "2026-09-01", "", "424B2", "p.htm"),
+    )
+    page1 = block(("0000000001-25-000001", "2025-02-01", "2024-12-31", "10-K", "k24.htm"))
+    page2 = block(("0000000001-24-000001", "2024-02-01", "2023-12-31", "10-K", "k23.htm"))
+    page3 = block(("0000000001-23-000001", "2023-02-01", "2022-12-31", "10-K", "k22.htm"))
+    pages = {
+        f"CIK0000000001-submissions-00{i}.json": p for i, p in enumerate([page1, page2, page3], 1)
+    }
+    requested = []
+
+    def handler(req):
+        name = str(req.url).rsplit("/", 1)[1]
+        requested.append(name)
+        return httpx.Response(200, json=pages[name])
+
+    client = SecClient(
+        "t t@example.com",
+        tmp_path,
+        transport=httpx.MockTransport(handler),
+        limiter=TokenBucket(1e6, sleep=lambda s: None),
+    )
+    sub = {"filings": {"recent": recent, "files": [{"name": n} for n in pages]}}
+    filings = all_filing_rows(client, 1, sub)
+    assert requested == list(pages)[:2]  # stops once 3 10-Ks are known
+    docs = latest_documents(filings)
+    assert [f["primary_doc"] for f in docs] == [
+        "k25.htm",
+        "k24.htm",
+        "k23.htm",
+        "q3.htm",
+        "q2.htm",
+        "q1.htm",
+        "q0.htm",
+    ]

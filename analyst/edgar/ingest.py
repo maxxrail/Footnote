@@ -107,8 +107,8 @@ def company_row(cik: int, ticker: str, sub: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def filing_rows(cik: int, sub: dict[str, Any]) -> list[dict[str, Any]]:
-    recent = sub.get("filings", {}).get("recent", {})
+def filing_rows(cik: int, recent: dict[str, Any]) -> list[dict[str, Any]]:
+    """Rows from one columnar filings block (submissions["filings"]["recent"] or a page)."""
     out = []
     for i, accn in enumerate(recent.get("accessionNumber", [])):
         doc = recent["primaryDocument"][i] or None
@@ -177,6 +177,30 @@ def stub_filings(cik: int, facts: Iterable[dict[str, Any]], known: set[str]) -> 
     return list(stubs.values())
 
 
+def _have_enough_documents(filings: Sequence[dict[str, Any]]) -> bool:
+    return all(
+        sum(1 for f in filings if f["form"] == form and f["primary_doc"]) >= n
+        for form, n in DOCS_TO_KEEP.items()
+    )
+
+
+def all_filing_rows(
+    client: SecClient, cik: int, sub: dict[str, Any], refresh: bool = False
+) -> list[dict[str, Any]]:
+    """Filings from the 'recent' block, plus older pages until the documents we keep are
+    covered. Prospectus-heavy issuers (GS, MS) fill 'recent' with thousands of 424B2s, so
+    their 10-Ks from two and three years ago are only on later pages."""
+    filings = filing_rows(cik, sub.get("filings", {}).get("recent", {}))
+    for page in sub.get("filings", {}).get("files", []):
+        if _have_enough_documents(filings):
+            break
+        filings += filing_rows(cik, client.submissions_page(page["name"], refresh=refresh))
+    unique: dict[str, dict[str, Any]] = {}
+    for f in filings:
+        unique.setdefault(f["accession"], f)  # pages don't overlap, but be safe
+    return list(unique.values())
+
+
 def latest_documents(filings: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     """The last 3 10-Ks and last 4 10-Qs (originals, not amendments) with a primary doc."""
     picked: list[dict[str, Any]] = []
@@ -207,7 +231,7 @@ def ingest_company(
     sub = client.submissions(cik, refresh=refresh)
     counts.companies = upsert(session, Company.__table__, [company_row(cik, ticker, sub)], ["cik"])
 
-    filings = filing_rows(cik, sub)
+    filings = all_filing_rows(client, cik, sub, refresh)
     facts = fact_rows(cik, client.companyfacts(cik, refresh=refresh))
     stubs = stub_filings(cik, facts, {f["accession"] for f in filings})
     counts.filings = upsert(session, Filing.__table__, filings, ["accession"])
@@ -289,6 +313,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # one line per request is noise
 
     settings = get_settings()
     tickers = args.tickers or read_universe(args.universe)
