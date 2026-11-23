@@ -63,8 +63,10 @@ def pg_engine() -> Iterator[Engine]:
         )
     schema = f"test_{uuid.uuid4().hex[:10]}"
     with admin.begin() as conn:
+        conn.execute(text("create extension if not exists vector"))  # lives in public
         conn.execute(text(f'create schema "{schema}"'))
-    engine = create_engine(url, connect_args={"options": f"-csearch_path={schema}"})
+    # public stays on the path for the pgvector type and operators; tables go in schema
+    engine = create_engine(url, connect_args={"options": f"-csearch_path={schema},public"})
     Base.metadata.create_all(engine)
     try:
         yield engine
@@ -79,7 +81,12 @@ def pg_engine() -> Iterator[Engine]:
 def db(pg_engine: Engine) -> Iterator[Engine]:
     """A clean schema for each test."""
     with pg_engine.begin() as conn:
-        conn.execute(text("truncate facts, filings, companies restart identity cascade"))
+        conn.execute(
+            text(
+                "truncate chunks, filing_sections, filing_texts, facts, filings, companies "
+                "restart identity cascade"
+            )
+        )
     yield pg_engine
 
 
