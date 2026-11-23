@@ -10,7 +10,14 @@ from sqlalchemy import func, select
 
 from analyst.db.models import Company, Fact, Filing
 from analyst.edgar.concepts import get_series
-from analyst.edgar.ingest import fact_rows, latest_documents, read_universe, run, upsert
+from analyst.edgar.ingest import (
+    fact_rows,
+    latest_documents,
+    read_universe,
+    run,
+    upsert,
+    upsert_filings,
+)
 from analyst.edgar.show import show
 from tests.conftest import load_fixture
 
@@ -269,12 +276,8 @@ def test_filing_listed_under_two_companies_does_not_flip(session_factory):
             upsert(s, Company.__table__, [{"cik": cik, "ticker": str(cik), "name": "n"}], ["cik"])
         for _ in range(2):  # two full runs: JPM then ADI each time
             changed = [
-                upsert(
-                    s,
-                    Filing.__table__,
-                    [{**shared, "cik": cik, "url": archive_url(cik, accn, "primary_doc.xml")}],
-                    ["accession"],
-                    keep=["cik", "url"],
+                upsert_filings(
+                    s, [{**shared, "cik": cik, "url": archive_url(cik, accn, "primary_doc.xml")}]
                 )
                 for cik in (19617, 6281)
             ]

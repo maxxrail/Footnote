@@ -77,6 +77,8 @@ def upsert(
     """
     table = cast(Table, model_table)
     changed = 0
+    if not rows:
+        return 0
     for i in range(0, len(rows), CHUNK):
         chunk = rows[i : i + CHUNK]
         stmt = insert(table).values(list(chunk))
@@ -219,6 +221,18 @@ def document_path(raw_dir: Path, cik: int, accession: str, doc: str) -> Path:
     return raw_dir / "filings" / str(cik) / accession / doc
 
 
+def upsert_filings(
+    session: Session, filings: Sequence[dict[str, Any]], stubs: Sequence[dict[str, Any]] = ()
+) -> int:
+    # A filing can be listed under several companies (JPM's Schedule 13G on its ADI stake is
+    # in both submissions). The first company to list it owns it (cik and the cik-based url),
+    # so re-runs don't flip them back and forth.
+    changed = upsert(session, Filing.__table__, filings, ["accession"], keep=["cik", "url"])
+    # Stubs never overwrite a full row that a later submissions page may have written.
+    changed += upsert(session, Filing.__table__, stubs, ["accession"], update=False)
+    return changed
+
+
 # -- orchestration -----------------------------------------------------------------------
 
 
@@ -238,12 +252,7 @@ def ingest_company(
     filings = all_filing_rows(client, cik, sub, refresh)
     facts = fact_rows(cik, client.companyfacts(cik, refresh=refresh))
     stubs = stub_filings(cik, facts, {f["accession"] for f in filings})
-    # A filing can be listed under several companies (JPM's Schedule 13G on its ADI stake is
-    # in both submissions). The first company to list it owns it (cik and the cik-based url),
-    # so re-runs don't flip them back and forth.
-    counts.filings = upsert(session, Filing.__table__, filings, ["accession"], keep=["cik", "url"])
-    # Stubs never overwrite a full row that a later submissions page may have written.
-    counts.filings += upsert(session, Filing.__table__, stubs, ["accession"], update=False)
+    counts.filings = upsert_filings(session, filings, stubs)
 
     for f in facts:
         f.pop("_filed")

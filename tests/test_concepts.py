@@ -83,8 +83,9 @@ def test_fallback_fills_periods_missing_from_preferred_tag():
 
 def test_fy_keeps_only_annual_durations_from_10k():
     facts = [
-        fact(REV, 400, D(2023, 1, 1), D(2023, 12, 31)),  # 364 days, 10-K: keep
         fact(REV, 100, D(2023, 10, 1), D(2023, 12, 31)),  # quarter inside a 10-K: drop
+        fact(REV, 400, D(2023, 1, 1), D(2023, 12, 31)),  # 364 days, 10-K: keep
+        fact(REV, 200, D(2024, 1, 1), D(2024, 6, 30)),  # half-year stub in a 10-K: drop
         fact(REV, 300, D(2023, 1, 1), D(2023, 9, 30), form="10-Q"),  # 9-month YTD: drop
         fact(REV, 401, D(2022, 1, 1), D(2022, 12, 31), form="10-Q"),  # wrong form: drop
     ]
