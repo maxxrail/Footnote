@@ -252,22 +252,32 @@ def test_older_submission_pages_fetched_until_documents_covered(tmp_path):
 
 
 def test_filing_listed_under_two_companies_does_not_flip(session_factory):
-    """Real case: JPM-filed notes referencing ADI are in both companies' submissions."""
+    """Real case: JPM's Schedule 13G on ADI is in both companies' submissions, and the
+    archive URL embeds the listing company's CIK."""
+    from analyst.edgar.client import archive_url
+
+    accn = "0000019617-25-000610"
     shared = {
-        "accession": "0000019617-25-000610",
-        "form": "424B2",
-        "filed_at": dt.date(2025, 6, 1),
+        "accession": accn,
+        "form": "SCHEDULE 13G/A",
+        "filed_at": dt.date(2025, 8, 5),
         "period_of_report": None,
-        "primary_doc": "x.htm",
-        "url": "u",
+        "primary_doc": "primary_doc.xml",
     }
     with session_factory() as s:
         for cik in (19617, 6281):
             upsert(s, Company.__table__, [{"cik": cik, "ticker": str(cik), "name": "n"}], ["cik"])
         for _ in range(2):  # two full runs: JPM then ADI each time
             changed = [
-                upsert(s, Filing.__table__, [{**shared, "cik": cik}], ["accession"], keep=["cik"])
+                upsert(
+                    s,
+                    Filing.__table__,
+                    [{**shared, "cik": cik, "url": archive_url(cik, accn, "primary_doc.xml")}],
+                    ["accession"],
+                    keep=["cik", "url"],
+                )
                 for cik in (19617, 6281)
             ]
         assert changed == [0, 0]
-        assert s.get(Filing, shared["accession"]).cik == 19617
+        row = s.get(Filing, accn)
+        assert row.cik == 19617 and "/data/19617/" in row.url

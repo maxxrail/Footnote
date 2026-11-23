@@ -238,9 +238,10 @@ def ingest_company(
     filings = all_filing_rows(client, cik, sub, refresh)
     facts = fact_rows(cik, client.companyfacts(cik, refresh=refresh))
     stubs = stub_filings(cik, facts, {f["accession"] for f in filings})
-    # A filing can be listed under several companies (JPM-issued notes linked to ADI appear
-    # in both submissions). The first company to list it owns it, so re-runs don't flip cik.
-    counts.filings = upsert(session, Filing.__table__, filings, ["accession"], keep=["cik"])
+    # A filing can be listed under several companies (JPM's Schedule 13G on its ADI stake is
+    # in both submissions). The first company to list it owns it (cik and the cik-based url),
+    # so re-runs don't flip them back and forth.
+    counts.filings = upsert(session, Filing.__table__, filings, ["accession"], keep=["cik", "url"])
     # Stubs never overwrite a full row that a later submissions page may have written.
     counts.filings += upsert(session, Filing.__table__, stubs, ["accession"], update=False)
 
