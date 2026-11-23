@@ -17,7 +17,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from sqlalchemy import Engine, create_engine, text
+from sqlalchemy import Connection, Engine, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from analyst.config import get_settings
@@ -26,6 +26,7 @@ from analyst.edgar.client import SecClient, TokenBucket
 
 FIXTURES = Path(__file__).parent / "fixtures"
 TEST_UA = "analyst-agent-tests tests@example.com"
+TEST_SCHEMAS: dict[Engine, str] = {}  # engine -> its throwaway schema
 
 
 @pytest.fixture(autouse=True)
@@ -65,10 +66,16 @@ def pg_engine() -> Iterator[Engine]:
     with admin.begin() as conn:
         conn.execute(text("create extension if not exists vector"))  # lives in public
         conn.execute(text(f'create schema "{schema}"'))
-    # public stays on the path for the pgvector type and operators; tables go in schema
+    # public stays on the path for the pgvector type and operators; tables go in schema.
     engine = create_engine(url, connect_args={"options": f"-csearch_path={schema},public"})
-    Base.metadata.create_all(engine)
+    TEST_SCHEMAS[engine] = schema
     try:
+        # checkfirst=False: with public on the path, the "does it exist?" check would see
+        # the real public tables and skip creating ours, and tests would then write to
+        # (and truncate!) the real data. Unqualified CREATE goes to the first schema.
+        Base.metadata.create_all(engine, checkfirst=False)
+        with engine.connect() as conn:
+            assert_isolated(conn, schema)
         yield engine
     finally:
         engine.dispose()
@@ -77,16 +84,28 @@ def pg_engine() -> Iterator[Engine]:
         admin.dispose()
 
 
+def assert_isolated(conn: Connection, schema: str) -> None:
+    """Every model table must resolve to the throwaway schema, never to public."""
+    for table in Base.metadata.sorted_tables:
+        found = conn.execute(
+            text(
+                "select n.nspname from pg_class c join pg_namespace n on n.oid = c.relnamespace "
+                "where c.oid = to_regclass(:t)"
+            ),
+            {"t": table.name},
+        ).scalar()
+        if found != schema:
+            raise RuntimeError(f"test table {table.name!r} resolves to schema {found!r}")
+
+
 @pytest.fixture
 def db(pg_engine: Engine) -> Iterator[Engine]:
     """A clean schema for each test."""
+    schema = TEST_SCHEMAS[pg_engine]
+    tables = ", ".join(f'"{schema}"."{t.name}"' for t in Base.metadata.sorted_tables)
     with pg_engine.begin() as conn:
-        conn.execute(
-            text(
-                "truncate chunks, filing_sections, filing_texts, facts, filings, companies "
-                "restart identity cascade"
-            )
-        )
+        assert_isolated(conn, schema)
+        conn.execute(text(f"truncate {tables} restart identity cascade"))
     yield pg_engine
 
 
