@@ -14,8 +14,6 @@ jobs:
   quality:
     name: Lint, types, tests
     runs-on: ubuntu-latest
-    # Nothing to check until Part 1 adds pyproject.toml.
-    if: ${{ hashFiles('pyproject.toml') != '' }}
 
     # Same image as docker-compose, so CI tests what developers run.
     services:
@@ -93,11 +91,26 @@ jobs:
           docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.18.4 \
             detect --source /repo --redact --no-banner
 
+  has-dockerfile:
+    # hashFiles() isn't allowed in a job-level `if:`, so this job checks for the file
+    # and the real job reads its output.
+    name: Check for Dockerfile
+    runs-on: ubuntu-latest
+    outputs:
+      present: ${{ steps.check.outputs.present }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: check
+        run: |
+          if [ -f "Dockerfile" ]; then echo "present=true" >> "$GITHUB_OUTPUT"
+          else echo "present=false" >> "$GITHUB_OUTPUT"; fi
+
   docker:
     name: Docker build
     runs-on: ubuntu-latest
     # Part 6 adds the Dockerfile.
-    if: ${{ hashFiles('Dockerfile') != '' }}
+    needs: has-dockerfile
+    if: needs.has-dockerfile.outputs.present == 'true'
     steps:
       - uses: actions/checkout@v7
 
