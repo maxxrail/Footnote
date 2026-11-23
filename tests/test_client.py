@@ -208,3 +208,56 @@ def test_tickers_map(tmp_path):
     payload = {"0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."}}
     c = make_client(tmp_path, lambda r: httpx.Response(200, json=payload))
     assert c.tickers() == {"AAPL": 320193}
+
+
+class CountingLimiter(TokenBucket):
+    def __init__(self) -> None:
+        super().__init__(1e6, sleep=lambda s: None)
+        self.calls = 0
+
+    def acquire(self) -> None:
+        self.calls += 1
+        super().acquire()
+
+
+def test_every_network_request_goes_through_the_limiter(tmp_path):
+    responses = [httpx.Response(503), httpx.Response(200, text="ok")]
+    limiter = CountingLimiter()
+    c = make_client(tmp_path, lambda r: responses.pop(0), limiter=limiter)
+    c.get_bytes("https://data.sec.gov/x")  # 1 retry + 1 success
+    c.get_bytes("https://data.sec.gov/x")  # cache hit: no token
+    assert limiter.calls == c.stats.network == 2
+
+
+def test_redirect_hops_are_rate_limited_and_keep_user_agent(tmp_path):
+    seen = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append((str(req.url), req.headers["User-Agent"]))
+        if req.url.path == "/old":
+            return httpx.Response(301, headers={"Location": "/new"})
+        return httpx.Response(200, text="moved")
+
+    limiter = CountingLimiter()
+    c = make_client(tmp_path, handler, limiter=limiter)
+    assert c.get_bytes("https://www.sec.gov/old") == b"moved"
+    assert seen == [("https://www.sec.gov/old", UA), ("https://www.sec.gov/new", UA)]
+    assert limiter.calls == c.stats.network == 2
+
+
+def test_redirect_loop_gives_up(tmp_path):
+    c = make_client(tmp_path, lambda r: httpx.Response(302, headers={"Location": "/loop"}))
+    with pytest.raises(httpx.TooManyRedirects):
+        c.get_bytes("https://www.sec.gov/loop")
+
+
+def test_rate_of_exactly_10_is_rejected(tmp_path):
+    with pytest.raises(ValueError):
+        SecClient(UA, tmp_path, rate=10)
+
+
+def test_tests_cannot_reach_the_internet():
+    import socket
+
+    with pytest.raises(RuntimeError, match="network"):
+        socket.create_connection(("93.184.216.34", 443), timeout=1)

@@ -20,7 +20,7 @@ from analyst.edgar.concepts import CONCEPTS, SeriesPoint, get_series
 
 def format_table(company: Company, canonical: str, points: Sequence[SeriesPoint]) -> str:
     header = f"{company.ticker}  {company.name}  (CIK {company.cik})  {canonical}"
-    cols = ("FY", "Period", "Value", "Unit", "Concept", "Form", "Accession", "Fact id")
+    cols = ("Year", "Period", "Value", "Unit", "Concept", "Form", "Accession", "Fact id")
     rows = [
         (
             str(p.fiscal_year),

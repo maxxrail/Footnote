@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
@@ -25,6 +26,20 @@ from analyst.edgar.client import SecClient, TokenBucket
 
 FIXTURES = Path(__file__).parent / "fixtures"
 TEST_UA = "analyst-agent-tests tests@example.com"
+
+
+@pytest.fixture(autouse=True)
+def _no_internet(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests must not reach the network: only loopback (the test Postgres) is allowed."""
+    real_connect = socket.socket.connect
+
+    def guarded(self: socket.socket, address: object) -> None:
+        host = address[0] if isinstance(address, tuple) else address
+        if host not in ("127.0.0.1", "::1", "localhost") and not str(host).startswith("/"):
+            raise RuntimeError(f"test tried to open a network connection to {host!r}")
+        real_connect(self, address)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(socket.socket, "connect", guarded)
 
 
 def load_fixture(name: str) -> dict:

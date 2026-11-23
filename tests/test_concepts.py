@@ -96,8 +96,8 @@ def test_fy_keeps_only_annual_durations_from_10k():
 def test_q_keeps_only_quarterly_durations_from_10q():
     facts = [
         fact(REV, 100, D(2024, 1, 1), D(2024, 3, 31), form="10-Q"),  # 90 days: keep
-        fact(REV, 210, D(2024, 1, 1), D(2024, 6, 30), form="10-Q"),  # 6-month YTD: drop
         fact(REV, 110, D(2024, 4, 1), D(2024, 6, 30), form="10-Q"),  # keep
+        fact(REV, 210, D(2024, 1, 1), D(2024, 6, 30), form="10-Q"),  # YTD, later id: drop
         fact(REV, 400, D(2023, 1, 1), D(2023, 12, 31), form="10-Q"),  # annual: drop
         fact(REV, 99, D(2023, 10, 1), D(2023, 12, 31), form="10-K"),  # 10-K: drop
     ]
@@ -159,3 +159,62 @@ def test_point_carries_provenance():
 )
 def test_near_fiscal_year_end(day, fye, ok):
     assert _near_fiscal_year_end(day, fye) is ok
+
+
+def test_restatement_under_lower_priority_tag_still_wins():
+    """Original under Revenues (2018), restated under RFC (2020): the restatement wins."""
+    orig = fact(REV, 100, D(2017, 1, 1), D(2017, 12, 31), accn="a-18", filed=D(2018, 2, 1))
+    restated = fact(RFC, 90, D(2017, 1, 1), D(2017, 12, 31), accn="a-20", filed=D(2020, 2, 1))
+    [p] = select_series([orig, restated], "revenue")
+    assert (p.value, p.accession, p.concept) == (90, "a-20", RFC)
+
+
+def test_same_end_different_start_latest_filing_wins():
+    old = fact(REV, 1, D(2023, 1, 1), D(2023, 12, 31), accn="d1", filed=D(2024, 2, 1))
+    new = fact(REV, 2, D(2023, 1, 2), D(2023, 12, 31), accn="d2", filed=D(2025, 2, 1))
+    for order in ([old, new], [new, old]):
+        assert select_series(order, "revenue")[0].accession == "d2"
+
+
+def test_instant_q_needs_fiscal_quarter_end():
+    shares = "us-gaap:Assets"
+    facts = [
+        fact(shares, 1, None, D(2024, 12, 28), form="10-Q"),  # Apple Q1 end
+        fact(shares, 2, None, D(2025, 3, 29), form="10-Q"),  # Q2 end
+        fact(shares, 3, None, D(2025, 1, 17), form="10-Q"),  # cover-page date: drop
+    ]
+    pts = select_series(facts, "total_assets", "Q", fiscal_year_end="0927")
+    assert [p.value for p in pts] == [1, 2]
+
+
+def test_instants_refused_without_fiscal_year_end():
+    facts = [fact("us-gaap:Assets", 1, None, D(2024, 12, 31))]
+    assert select_series(facts, "total_assets", "FY", fiscal_year_end=None) == []
+
+
+def test_shares_outstanding_ignores_cover_page_dei():
+    assert "dei:EntityCommonStockSharesOutstanding" not in CONCEPTS["shares_outstanding"].candidates
+
+
+@pytest.mark.parametrize(
+    ("end", "label"),
+    [
+        (D(2024, 9, 28), 2024),
+        (D(2025, 1, 26), 2025),
+        (D(2021, 1, 3), 2020),
+        (D(2024, 12, 29), 2024),
+    ],
+)
+def test_fiscal_year_label(end, label):
+    from analyst.edgar.concepts import fiscal_year_label
+
+    assert fiscal_year_label(end) == label
+
+
+def test_fy_one_point_per_year_when_end_dates_disagree():
+    """GS tagged FY2008 as ending 2008-11-28 in one 10-K and 2008-11-30 in the next."""
+    a = fact(REV, 7, D(2007, 12, 1), D(2008, 11, 28), accn="g-10", filed=D(2010, 3, 1))
+    b = fact(REV, 7, D(2007, 12, 1), D(2008, 11, 30), accn="g-11", filed=D(2011, 3, 1))
+    for order in ([a, b], [b, a]):
+        [p] = select_series(order, "revenue")
+        assert (p.fiscal_year, p.accession) == (2008, "g-11")

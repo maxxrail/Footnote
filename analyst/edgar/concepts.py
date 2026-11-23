@@ -3,8 +3,8 @@
 Companies tag the same line item differently (and change tags over time: Apple used
 `SalesRevenueNet` until FY2018 and `RevenueFromContractWithCustomerExcludingAssessedTax`
 after). Each canonical item has an ordered list of candidate concepts. For every period,
-the highest-priority candidate that has a value for that period wins, so a series stays
-continuous across tag changes.
+the value from the latest filing wins; within one filing, the highest-priority candidate
+wins. So a series stays continuous across tag changes and restatements under a new tag.
 
 Selection rules (see `select_series`):
 - FY: facts from annual forms (10-K, 10-K/A). Duration items need a 350-380 day period.
@@ -105,10 +105,11 @@ CONCEPTS: dict[str, CanonicalConcept] = {
         _c(
             "shares_outstanding",
             "shares",
+            # Not dei:EntityCommonStockSharesOutstanding: it is measured on the cover-page
+            # date weeks after the period end, so it is a different data point.
             "us-gaap:CommonStockSharesOutstanding",
-            "dei:EntityCommonStockSharesOutstanding",
             instant=True,
-            desc="Common shares outstanding",
+            desc="Common shares outstanding at the balance-sheet date",
         ),
         _c(
             "operating_cash_flow",
@@ -163,8 +164,8 @@ class SeriesPoint:
     canonical: str
     period_start: dt.date | None
     period_end: dt.date
-    # Calendar year of period_end. Matches how most issuers name fiscal years (Apple FY2024
-    # ends 2024-09-28; NVIDIA FY2025 ends 2025-01-26), not every retailer's convention.
+    # See fiscal_year_label. Matches how most issuers name fiscal years (Apple FY2024 ends
+    # 2024-09-28; NVIDIA FY2025 ends 2025-01-26), not every retailer's convention.
     fiscal_year: int
     value: Decimal
     unit: str
@@ -188,6 +189,24 @@ def _near_fiscal_year_end(day: dt.date, fiscal_year_end: str) -> bool:
     return False
 
 
+def _near_fiscal_quarter_end(day: dt.date, fiscal_year_end: str) -> bool:
+    """True if `day` is near the fiscal year end or 3/6/9 months after it."""
+    month, dom = int(fiscal_year_end[:2]), int(fiscal_year_end[2:])
+    for k in range(4):
+        m = (month - 1 + 3 * k) % 12 + 1
+        if _near_fiscal_year_end(day, f"{m:02d}{min(dom, 28 if m == 2 else 30):02d}"):
+            return True
+    return False
+
+
+def fiscal_year_label(period_end: dt.date) -> int:
+    """Calendar year of the period end, except a year ending in the first week of January
+    (52/53-week "closest to Dec 31" calendars) belongs to the year before."""
+    if period_end.month == 1 and period_end.day <= FY_END_TOLERANCE_DAYS:
+        return period_end.year - 1
+    return period_end.year
+
+
 def _period_ok(
     f: FactRecord, concept: CanonicalConcept, period: Period, fiscal_year_end: str | None
 ) -> bool:
@@ -195,11 +214,13 @@ def _period_ok(
     if f.form not in forms or f.unit != concept.unit:
         return False
     if concept.instant:
-        if f.period_start is not None:
+        # Balance-sheet instants must sit on a fiscal year end (FY) or fiscal quarter end (Q).
+        # Without a known fiscal year end we can't tell, so refuse rather than guess.
+        if f.period_start is not None or not fiscal_year_end:
             return False
-        if period == "FY" and fiscal_year_end:
+        if period == "FY":
             return _near_fiscal_year_end(f.period_end, fiscal_year_end)
-        return True
+        return _near_fiscal_quarter_end(f.period_end, fiscal_year_end)
     if f.period_start is None:
         return False
     lo, hi = FY_DAYS if period == "FY" else Q_DAYS
@@ -216,29 +237,29 @@ def select_series(
     concept = CONCEPTS[canonical]
     priority = {name: i for i, name in enumerate(concept.candidates)}
 
-    # Per (concept, period): latest filing wins.
-    latest: dict[tuple[str, dt.date | None, dt.date], FactRecord] = {}
+    def rank(f: FactRecord) -> tuple[dt.date, str, int, int]:
+        # Latest filing first, so a restatement wins even if the company switched to a
+        # lower-priority tag when restating. Within one filing, the higher-priority tag wins;
+        # the fact id makes the choice deterministic for exact ties.
+        return (f.filed_at, f.accession, -priority[f.concept], f.fact_id)
+
+    # FY points are keyed by fiscal year, not exact end date: filers sometimes tag the same
+    # year with ends a few days apart (GS FY2008: 2008-11-28 in one 10-K, 11-30 in the next).
+    best: dict[object, FactRecord] = {}
     for f in facts:
         if f.concept not in priority or not _period_ok(f, concept, period, fiscal_year_end):
             continue
-        key = (f.concept, f.period_start, f.period_end)
-        cur = latest.get(key)
-        if cur is None or (f.filed_at, f.accession) > (cur.filed_at, cur.accession):
-            latest[key] = f
-
-    # Per period end: highest-priority candidate wins.
-    best: dict[dt.date, FactRecord] = {}
-    for f in latest.values():
-        cur = best.get(f.period_end)
-        if cur is None or priority[f.concept] < priority[cur.concept]:
-            best[f.period_end] = f
+        key = fiscal_year_label(f.period_end) if period == "FY" else f.period_end
+        cur = best.get(key)
+        if cur is None or rank(f) > rank(cur):
+            best[key] = f
 
     return [
         SeriesPoint(
             canonical=canonical,
             period_start=f.period_start,
             period_end=f.period_end,
-            fiscal_year=f.period_end.year,
+            fiscal_year=fiscal_year_label(f.period_end),
             value=f.value,
             unit=f.unit,
             concept=f.concept,

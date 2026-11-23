@@ -32,6 +32,8 @@ COMPANYFACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
 ARCHIVES_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accession_nodash}/{doc}"
 
 RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+MAX_REDIRECTS = 5
 
 
 def pad_cik(cik: int | str) -> str:
@@ -107,8 +109,8 @@ class SecClient:
             raise ValueError(
                 "SEC_USER_AGENT must be a name and contact email, e.g. 'Jane Doe jane@example.com'"
             )
-        if rate > 10:
-            raise ValueError("SEC fair access allows at most 10 requests/second")
+        if rate >= 10:
+            raise ValueError("SEC fair access: stay under 10 requests/second")
         self.cache_dir = cache_dir
         self.max_retries = max_retries
         self.backoff = backoff
@@ -118,7 +120,7 @@ class SecClient:
         self._http = httpx.Client(
             headers={"User-Agent": user_agent, "Accept-Encoding": "gzip, deflate"},
             timeout=httpx.Timeout(60.0, connect=10.0),
-            follow_redirects=True,
+            follow_redirects=False,  # redirects are followed in _fetch, through the limiter
             transport=transport,
         )
 
@@ -159,6 +161,7 @@ class SecClient:
 
     def _fetch(self, url: str) -> bytes:
         attempt = 0
+        redirects = 0
         while True:
             self.limiter.acquire()
             self.stats.network += 1
@@ -182,6 +185,12 @@ class SecClient:
                 self._sleep(delay)
                 attempt += 1
                 continue
+            if resp.status_code in REDIRECT_STATUSES and "Location" in resp.headers:
+                if redirects >= MAX_REDIRECTS:
+                    raise httpx.TooManyRedirects(f"more than {MAX_REDIRECTS} redirects: {url}")
+                url = str(resp.url.join(resp.headers["Location"]))
+                redirects += 1
+                continue  # next hop is rate-limited and counted like any request
             resp.raise_for_status()
             return resp.content
 
