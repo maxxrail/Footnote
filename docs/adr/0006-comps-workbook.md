@@ -18,7 +18,7 @@ formulas compute the right numbers.
 
 Sheet design:
 1. **Values only** (compute in Python, paste numbers): trivially correct, but not auditable and not what the spec asks for.
-2. **Formulas on Comps over raw values on Inputs**, NM by `IF(AND(ISNUMBER(..)), IF(den>0, num/den, "NM"), "NM")`, stats by `MEDIAN`/`AVERAGE`/`QUARTILE.INC` (which skip text).
+2. **Formulas on Comps over raw values on Inputs**, NM by `IF(AND(ISNUMBER(..)), IF(den>0, num/den, "NM"), "NM")`, stats by `MEDIAN`/`AVERAGE`/`QUARTILE` (which skip text).
 
 Testing the formulas:
 - a. Assert formula strings only.
@@ -32,7 +32,19 @@ Testing the formulas:
 - **Comps:** market cap, EV, EBITDA and the three multiples as formulas (black); the stats rows cover peers only.
 - **Sources:** each filing used, with a link.
 
-`formulas` evaluates `IF`, `AND`, `ISNUMBER`, `IFERROR`, `MEDIAN`, `AVERAGE`, `QUARTILE.INC` and `COUNT` as Excel does: "NM" text is skipped, and the 25th percentile of {10, 20} is 12.5. The test recalculates every Comps cell of the fixture workbook and compares it to `analyst.metrics`; they agree on all 6 columns for every company. The three live workbooks recalculate with no errors:
+`formulas` evaluates `IF`, `AND`, `ISNUMBER`, `IFERROR`, `MEDIAN`, `AVERAGE`, `QUARTILE` and
+`COUNT`; "NM" text is skipped, and the 25th percentile of {10, 20} is 12.5. The test recalculates
+every Comps cell of the fixture workbook and compares it to `analyst.metrics`, and they agree on
+all 6 columns for every company. **`formulas` is not Excel**, though, and it accepts function
+names Excel would not:
+- The first version used `QUARTILE.INC`. In the file Excel stores that as `_xlfn.QUARTILE.INC`,
+  and openpyxl doesn't add the prefix, so real Excel would most likely show `#NAME?`. `IFERROR`
+  would hide it as "NM" (found by the part-reviewer).
+- The sheet now uses the legacy `QUARTILE`, which Excel defines as identical to `QUARTILE.INC`.
+- A test asserts every function in the workbook is in openpyxl's list of plain Excel functions.
+
+Real Excel is still only checked by hand (Maxx, acceptance check 3). The three live
+workbooks recalculate in `formulas` with no errors:
 
 | Workbook | Formulas | NM cells | Errors | Cited inputs | Source filings |
 |---|---|---|---|---|---|

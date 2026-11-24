@@ -14,6 +14,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `analyst/workflows/comps.py`: public comps to `comps_{TICKER}_{date}.xlsx`.
   - Inputs sheet: blue values, each with a citation comment.
   - Comps sheet: live formulas, NM rule, peer median/mean/quartiles, `0.0x` and `$#,##0,,` formats, frozen header.
+    Only functions Excel stores without an `_xlfn.` prefix (`QUARTILE`, not `QUARTILE.INC`).
   - Sources sheet. Peer override with `--peers` (ADR 0006).
 - `analyst/workflows/tearsheet.py`: one-page PDF + Markdown.
   - Agent-written business summary (Item 1) and top 5 risks (Item 1A), cited.
@@ -28,7 +29,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   computed deltas) as citable refs that the post-check accepts.
 - `fin.difference`; the post-check reads "pp", "percentage points", "bps" and "basis points".
 - `examples/`: comps for MSFT, NVDA and JPM, an NVDA tearsheet and an MSFT earnings brief.
-- `scripts/mutation_check_part4.py`: 18 guarantees, each broken on purpose and caught.
+- `scripts/mutation_check_part4.py`: 25 guarantees, each broken on purpose and caught.
 
 ### Changed
 - Market cap uses the newer of the balance-sheet and cover-page share counts

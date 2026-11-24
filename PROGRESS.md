@@ -493,7 +493,7 @@ $ uv run pytest -q --cov=analyst/metrics --cov-report=term
 analyst\metrics\finance.py      100      0   100%
 analyst\metrics\yahoo.py         42      0   100%
 TOTAL                           323      0   100%       (metrics coverage still 100%)
-282 passed, 8 deselected
+293 passed, 8 deselected
 All checks passed!                     (ruff)
 97 files already formatted             (ruff format)
 Success: no issues found in 73 source files   (mypy)
@@ -518,9 +518,9 @@ NVDA: EV/Revenue 13.2x vs peer median 13.3x; EV/EBITDA 29.9x vs peer median 40.0
 $ ... comps --ticker JPM
 JPM: EV/Revenue NM vs peer median 4.3x; EV/EBITDA NM vs peer median NM; P/E 12.7x vs peer median 10.7x
 $ ... tearsheet --ticker NVDA
-NVDA tearsheet: fits on one page, sources after it     | cost $0.0433
+NVDA tearsheet: fits on one page, sources after it     | cost $0.0558
 $ ... earnings --ticker MSFT
-MSFT FY2027 Q1: revenue +18.8% vs FY2026 Q1; risk factors changed     | cost $0.0455
+MSFT FY2027 Q1: revenue +18.8% vs FY2026 Q1; risk factors changed     | cost $0.0523
 ```
 Recalculating the three workbooks with `formulas` gives no errors:
 
@@ -538,8 +538,11 @@ Neither the tearsheet nor the brief has any `_Number check` flag. Hand checks:
 - MSFT FY2027 Q1 revenue 92,279 / 77,673 − 1 = 18.8%.
 - MSFT net margin change 36,629 / 92,279 − 27,747 / 77,673 = 39.7% − 35.7% = +4.0 pp.
 
-The tearsheet profile fits on page 1 (rendered with pypdfium2 and inspected:
+The tearsheet profile fits on page 1 (rendered with `uv run --with pypdfium2` and inspected:
 `docs/img/tearsheet_NVDA_page1.png`). Its split warning reads "changes 10.1x from FY2022 to FY2023".
+
+Examples were regenerated after the review fixes (with nothing else running). The MSFT brief's
+risk diff now reports 18 new paragraphs; it was 24, and 6 of those were pieces of 10-K paragraphs.
 
 **3. Open one comps sheet in Excel (Maxx, by hand): NOT DONE YET.** Excel isn't available to
 me, and LibreOffice isn't installed. What *was* verified: the `formulas` package recalculates
@@ -548,7 +551,8 @@ every formula with no `#REF!` or `#DIV/0!`, and the results match `analyst.metri
 **4. README "Part 4" section with screenshot placeholders: PASS**: README.md → "Part 4: Banker
 deliverables". It has an Excel screenshot placeholder for Maxx and the real tearsheet page image.
 
-**Mutation checks** (`uv run python scripts/mutation_check_part4.py`): **18/18** caught.
+**Mutation checks** (`uv run python scripts/mutation_check_part4.py`): **25/25** caught
+(18 at first, 7 added for the review's findings).
 The Part 3 script still catches 48/48 after its two now-ambiguous targets were made unique.
 ```
 CAUGHT | EV formula = market cap + debt - cash (adds cash) | 1 failed
@@ -570,6 +574,29 @@ CAUGHT | margin change = current - prior (reversed) | 1 failed
 CAUGHT | near-copies of 10-K paragraphs are not new (everything is new) | 1 failed
 CAUGHT | 'no material changes' means unchanged (counted as a new risk) | 1 failed
 ```
+
+**part-reviewer findings (Part 4) and what was done**
+| # | Finding | Action |
+|---|---|---|
+| 1 | `QUARTILE.INC` written without Excel's `_xlfn.` prefix: real Excel would most likely show `#NAME?`, and `IFERROR` would hide it as "NM" | **Fixed.** Legacy `QUARTILE` (identical in Excel). A test checks every workbook function is in openpyxl's plain-Excel list. Mutation added. |
+| 2 | Risk diff counted pieces of 10-K paragraphs (10-Q text cut at page breaks) as new; the MSFT brief had 6 such, one backing a false "what changed" bullet | **Fixed.** A paragraph found anywhere in the 10-K text is not new. Test and mutation. MSFT: 24 → 18 new. |
+| 3 | No revenue fact in the latest 10-Q → fell back to an older quarter (Citigroup: FY2025 Q4 while citing a Q3-2026 10-Q) | **Fixed.** The quarter comes from the 10-Q's own revenue point, else its period of report, else refuse. Tests and mutation. |
+| 4 | Revenue LTM vs EBITDA FY mixing was shown only on Inputs | **Fixed (disclosed).** Each such row gets a "bases differ: …" note in the Comps Notes column. Test and mutation. LTM D&A from YTD is still to do. |
+| 5 | Duplicate peers counted twice | **Fixed.** De-duplicated. Test and mutation. |
+| 6 | Earnings table footnotes lacked concept, period and fact id; margin rows had no facts | **Fixed.** Every row cites each fact (concept, period, value, unit, form, accession, fact id). Test and mutation. |
+| 7 | Tearsheet valuation footnote didn't cite the denominators | **Fixed.** Every input with its basis and facts, plus the formulas. Test. |
+| 8 | A 10-K/A without Item 1/1A could be "the latest 10-K" | **Fixed.** Filings are chosen by the section needed (`latest_filing_with_section`). |
+| 9 | "The 10-Q has no Part II, Item 1A" stated as fact when it may be a parse miss | **Fixed.** Now "no … section was found … (it may be missing or the parser may have missed its heading)". |
+| 10 | Failed runs could stay `running` or lose cost | **Fixed.** The run is stored in `finally` with status and all agent cost so far. Test (stored as `failed`) and mutation. |
+| 11 | Error message mentioned a `--no-agent` flag that doesn't exist | **Fixed.** |
+| 12 | Excel market cap had no >0 guard (Python did) | **Fixed.** `IF(AND(p>0,sh>0),…)`. |
+| 13 | Tearsheet footnotes not in reading order | **Fixed.** Business, financials, risks, valuation. |
+| 14 | Model meta-comment in the business section ("the excerpts do not name…") | **Fixed.** The prompt allows `search_filings` on Item 1 and says to leave out what isn't there. The NVDA business section now names both segments, cited. |
+
+Also found after the review: in the regenerated MSFT brief, the model put `[^n]` markers after the
+full stop ("…25%. [^9]"), and the post-check read them as a new sentence (every number flagged).
+**Fixed.** Markers right after a sentence's full stop belong to it. Test and mutation; the brief was regenerated with no flags.
+
 
 ## Notes for Maxx
 <!-- Anything the user has to do by hand (keys, Docker, accounts). -->

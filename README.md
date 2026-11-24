@@ -192,7 +192,7 @@ uv run python -m analyst.workflows run comps --ticker MSFT                 # det
 uv run python -m analyst.workflows run comps --ticker MSFT --peers ORCL,CRM,ADBE
 uv run python -m analyst.workflows run tearsheet --ticker NVDA             # ~$0.04 (agent steps)
 uv run python -m analyst.workflows run earnings --ticker MSFT              # ~$0.05
-uv run python scripts/mutation_check_part4.py                              # 18 guarantees, each broken once
+uv run python scripts/mutation_check_part4.py                              # 25 guarantees, each broken once
 ```
 
 Every run is stored in the `workflow_runs` table: inputs, status, output paths, a trace of
