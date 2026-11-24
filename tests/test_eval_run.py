@@ -224,3 +224,21 @@ def test_gate(tmp_path: Path) -> None:
     assert below == ["accuracy 0.7 < 0.8", "1 items errored"]
     assert gate({}, "other", t) == ["no thresholds for dataset 'other' in " + str(t)]
     assert gate({}, "smoke", tmp_path / "none.json")[0].startswith("no thresholds file")
+
+
+def test_an_account_level_api_error_stops_the_run(
+    env: Path, session_factory: SessionFactory
+) -> None:
+    class BadRequestError(Exception):  # same name as the SDK's, as the runner matches it
+        pass
+
+    class Broke:
+        model = "claude-sonnet-5-5"
+
+        def create(self, **kw: Any) -> Any:
+            raise BadRequestError("Your credit balance is too low to access the Anthropic API.")
+
+    cfg = Config(datasets=["test"], concurrency=1)
+    results = run_items(ITEMS[:3], cfg, session_factory, lambda _id: Broke(), lambda _id: None)
+    assert [r.status for r in results] == ["error", "skipped", "skipped"]
+    assert "stopped after an API error: BadRequestError" in (results[1].skip_reason or "")

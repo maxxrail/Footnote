@@ -167,6 +167,14 @@ def _skip_reason(item: Item, loaded: set[str], universe: set[str]) -> str | None
     return f"not in the loaded corpus: {missing}" if missing else None
 
 
+def is_fatal(exc: Exception) -> bool:
+    """Errors no other item can avoid: bad key, no permission, no credit."""
+    name = type(exc).__name__
+    if name in ("AuthenticationError", "PermissionDeniedError"):
+        return True
+    return name == "BadRequestError" and "credit balance" in str(exc)
+
+
 def grade(
     item: Item,
     answer: Answer,
@@ -260,6 +268,7 @@ def run_items(
         else None
     )
     spend = _Spend()
+    fatal: list[str] = []  # an account-level API error stops the rest of the run
 
     def agent_llm(item_id: str) -> LLMClient:
         if recording is not None:
@@ -276,6 +285,8 @@ def run_items(
 
     def one(item: Item) -> ItemResult:
         reason = _skip_reason(item, loaded, universe)
+        if reason is None and fatal:
+            reason = f"stopped after an API error: {fatal[0]}"
         if reason is None and not spend.unknown and spend.total >= cfg.budget:
             reason = f"budget of ${cfg.budget} spent"
         if reason:
@@ -302,6 +313,8 @@ def run_items(
             )
             result, judge_cost = grade(item, answer, item_judge(item.id), session_factory)
         except Exception as exc:
+            if is_fatal(exc):
+                fatal.append(f"{type(exc).__name__}: {str(exc)[:200]}")
             return ItemResult(
                 id=item.id,
                 category=item.category,
