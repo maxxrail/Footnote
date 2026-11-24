@@ -24,13 +24,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`RERANK=true` or `--rerank`). Returns `Citation`s with a hash of the cited text;
   `resolve()` returns the exact span and `verify()` checks it. Form/section filters ignore case.
 - `python -m analyst.retrieval.cli "supply chain risk" --ticker NVDA`.
-- `tests/fixtures/retrieval_gold.yaml` (15 queries) and `python -m analyst.retrieval.evaluate`
-  (recall@k per retriever).
-- `scripts/section_survey.py`, `scripts/mutation_check_part2.py` (35 mutations), ADRs 0003-0004.
+- Contextual chunk headers (`chunks.context`: company, ticker, form, filing date, section),
+  indexed in full-text and embedded with the chunk, never cited. Migration `5e1f0c2a9b7d`,
+  `PARSER_VERSION = 2`.
+- `tests/fixtures/retrieval_gold.yaml` (15 queries), `tests/fixtures/retrieval_holdout.yaml`
+  (10 held-out queries) and `python -m analyst.retrieval.evaluate [--gold PATH]` (recall@k per
+  retriever).
+- `scripts/section_survey.py`, `scripts/mutation_check_part2.py` (37 mutations), ADRs 0003-0004.
 
 ### Known gaps
-- Retrieval eval (15 queries, recall@5): hybrid 13/15 vs vector-only 14/15 on the open set, so the
-  spec's "hybrid ≥ both" holds only ticker-filtered (14/15 each). Hybrid + rerank: 15/15. See ADR 0004.
+- Retrieval eval (recall@5, open / filtered): "hybrid ≥ both" holds on the held-out set (hybrid
+  10/10, vector 10/10, full-text 8/10) but not on the gold set (hybrid 14/15 vs vector 15/15,
+  miss `orcl-capex`). Hybrid + rerank: 15/15 and 10/10. 450-token chunks tie with 800. See ADR 0004.
 - WFC/USB Risk Factors and MD&A live in Exhibit 13, which isn't downloaded.
 
 ### Fixed

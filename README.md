@@ -6,7 +6,7 @@ specific SEC filing passage or XBRL fact. It also runs banker workflows end to e
 comps to a formula-driven Excel sheet, one-page tearsheets, and earnings briefs. A real eval
 harness measures how accurate it is.
 
-> Status: Part 2 of 6 in review (v0.2.0, data layer + filing search). One spec target is met only with a ticker filter (see Part 2 below). See [PROGRESS.md](PROGRESS.md).
+> Status: Part 2 of 6 in review (v0.2.0, data layer + filing search). One spec target ("hybrid ≥ both") is met on the held-out queries but misses by one on the gold set (see Part 2 below). See [PROGRESS.md](PROGRESS.md).
 
 ## What's inside (built in 6 parts)
 1. **Data layer**: SEC EDGAR + XBRL ingestion into Postgres, normalized and traceable
@@ -77,20 +77,26 @@ text, so every quote the agent makes later can be checked.
 - **Search** (`search.py`): vector top-50 + full-text top-50, fused with Reciprocal Rank
   Fusion, optional cross-encoder rerank, filters on company, form, section and date.
 
-Retrieval eval, recall@5 on 15 hand-written queries (`tests/fixtures/retrieval_gold.yaml`;
-a hit = right company and right section in the top 5):
+Each chunk is indexed and embedded with a short header ("Texas Instruments Inc (TXN), 10-K
+filed 2025-02-14. Item 1: Business."), because filing text says "we", not the company's name.
+The header is never part of a citation.
 
-| Retriever | open (all 25 companies) | ticker-filtered | s/query (CPU) |
+Retrieval eval, recall@5, open (all 25 companies) / ticker-filtered. A hit means the right
+company and the right section appear in the top 5. Gold = 15 hand-written queries
+(`tests/fixtures/retrieval_gold.yaml`). Held-out = 10 more, committed before the header change
+was measured (`tests/fixtures/retrieval_holdout.yaml`):
+
+| Retriever | gold (15) | held-out (10) | s/query (CPU) |
 |---|---|---|---|
-| vector-only (bge-small) | 0.93 | 0.93 | 0.48 |
-| full-text-only (Postgres FTS + IDF, "BM25" leg) | 0.87 | 0.93 | 0.13 |
-| hybrid (RRF) | 0.87 | 0.93 | 0.15 |
-| hybrid + cross-encoder rerank | **1.00** | **1.00** | 7.76 |
+| vector-only (bge-small) | 15 / 15 | 10 / 10 | 0.48 |
+| full-text-only (Postgres FTS + IDF, "BM25" leg) | 14 / 14 | 8 / 8 | 0.18 |
+| hybrid (RRF) | 14 / 14 | 10 / 10 | 0.21 |
+| hybrid + cross-encoder rerank | **15 / 15** | **10 / 10** | 7.61 |
 
-The spec's target "hybrid ≥ both" is **met ticker-filtered** (14/15 each), which is how the
-agent will search, and **not met on the open set** (13 vs 14). There it loses one query to near-duplicate passages repeated across a company's
-filings. Rerank fixes that but is slow on CPU, so it is off by default. Details:
-[ADR 0004](docs/adr/0004-hybrid-retrieval.md).
+The spec's target "hybrid ≥ both" is **met on the held-out set** (10 = 10 > 8) and **not on the
+gold set**, where hybrid trails vector by one query (`orcl-capex`). Rerank gets every query but
+is slow on CPU, so it's off by default. 450-token chunks tie with 800 (24/25 hybrid over all 25
+queries), so chunks stay at 800. Details: [ADR 0004](docs/adr/0004-hybrid-retrieval.md).
 
 ```powershell
 uv sync --extra dev --extra ml          # ml = sentence-transformers + torch (CPU)
@@ -99,6 +105,7 @@ uv run python -m analyst.retrieval.index              # parse + chunk + embed (~
 uv run python -m analyst.retrieval.cli "supply chain risk" --ticker NVDA
 uv run python -m analyst.retrieval.cli "goodwill impairment" --section "Item 7" --form 10-K -k 5
 uv run python -m analyst.retrieval.evaluate --misses  # recall@5 on the 15-query gold set
+uv run python -m analyst.retrieval.evaluate --misses --gold tests/fixtures/retrieval_holdout.yaml
 uv run python scripts/section_survey.py               # section-detection stats
 ```
 

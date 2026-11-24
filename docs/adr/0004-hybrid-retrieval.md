@@ -30,7 +30,8 @@ tokens (avg 3,391 chars), `BAAI/bge-small-en-v1.5` embeddings (384-d, HNSW).
 ## Decision
 
 Options 2 + 3, rerank **off** by default (`RERANK=true` or `--rerank` turns it on).
-`uv run python -m analyst.retrieval.evaluate --rerank --misses`, recall@5:
+`uv run python -m analyst.retrieval.evaluate --rerank --misses`, recall@5 (first run,
+before chunk headers; current numbers in the update at the end):
 
 | Retriever | open (no filter) | ticker-filtered | s/query (open, CPU) |
 |---|---|---|---|
@@ -85,10 +86,51 @@ Why the decision still stands:
 - Near-duplicate passages across filings crowd results. Candidate fixes for Part 5, to be
   measured on a bigger gold set: collapse hits with the same company + section +
   near-identical text (keep the newest filing), or prefer the latest filing per company.
-- **Chunk size was not tested.** bge-small truncates at 512 tokens, and an "800-token"
-  chunk (regex estimate) is ~860 WordPiece tokens: 87% of chunks exceed 512, so the vector
-  leg embeds only the first ~60% of most chunks. A 450-token comparison index was built
-  (`analyst_exp` DB, 36,284 chunks) but not embedded (≈ 55 min CPU; an earlier embedding run
-  was killed for low memory). Run it before changing `MAX_TOKENS`: index with
-  `--max-tokens 450 --overlap-tokens 60` into a fresh DB, then run `evaluate`.
+- Chunk size: tested after the decision, see the update below. Kept at 800.
 - The full-text leg is labelled "full-text" everywhere, not "BM25".
+
+## Update 2026-11-24: contextual chunk headers, a held-out set, chunk size
+
+**Held-out set first.** Before changing anything, I wrote 10 more queries
+(`tests/fixtures/retrieval_holdout.yaml`, commit `6cf211b`) and committed them before
+measuring, so they were never tuned against. Baseline (800 tokens, no headers), open /
+filtered: vector 9/10 / 10/10, full-text 7/10 / 8/10, hybrid 8/10 / 8/10, rerank 8/10 / 9/10.
+
+**Change: a contextual header per chunk** (general technique, not tuned to a query).
+Chunk text says "we", not "Texas Instruments", so a query that names the company has
+nothing to match. Each chunk now stores `context`, e.g. "Texas Instruments Inc (TXN),
+10-K filed 2025-02-14. Item 1: Business.". It is part of the full-text `tsv` and of what
+the embedder and reranker read (`context + "\n\n" + text`), but never part of a citation:
+the cited span is still `text` alone. `PARSER_VERSION = 2` rebuilds every filing.
+
+**Chunk size: 800 vs 450 tokens** (450 + 60 overlap fits bge-small's 512-token window;
+800 is ~860 model tokens). Both indexes have headers, `analyst_exp` holds the 450 one
+(36,284 chunks, avg 1,893 chars). Recall@5, open / filtered:
+
+| Retriever | 800 gold (15) | 800 held-out (10) | 450 gold (15) | 450 held-out (10) | 800 all 25 | 450 all 25 |
+|---|---|---|---|---|---|---|
+| vector-only | 15 / 15 | 10 / 10 | 15 / 15 | 10 / 10 | 25 / 25 | 25 / 25 |
+| full-text-only | 14 / 14 | 8 / 8 | 14 / 14 | 9 / 10 | 22 / 22 | 23 / 24 |
+| hybrid (RRF) | 14 / 14 | 10 / 10 | 15 / 15 | 9 / 10 | **24 / 24** | **24 / 25** |
+| hybrid + rerank | 15 / 15 | 10 / 10 | 15 / 15 | 10 / 10 | 25 / 25 | 25 / 25 |
+
+s/query (open, 800): vector 0.48, full-text 0.18, hybrid 0.21, rerank 7.61.
+
+Findings:
+
+- **Headers help every leg.** On the held-out set, hybrid goes from 8/10 to 10/10, and vector
+  and rerank to 10/10. On the gold set, vector and full-text gain one each.
+- **"Hybrid ≥ both" on 800 tokens: met on the held-out set (10 = 10 > 8), not on the gold
+  set (14 vs vector 15, open and filtered).** The miss is `orcl-capex`. The full-text leg
+  puts the first gold-section chunk at rank 15, while Item 1 overview and Item 8 cash-flow
+  ("Unpaid capital expenditures") chunks appear in both lists mid-way and win the fusion,
+  so the first Item 7 chunk lands at rank 14. That's the same RRF effect as `txn-300mm` above, which
+  the headers fixed.
+- **450 vs 800 is a tie.** Each size fails the hybrid check on a different set by one query
+  (800: `orcl-capex` on gold; 450: `now-subscription` on held-out, open only), and the
+  25-query totals are the same open (24/25). Picking 450 because it passes the spec's gold set
+  would be choosing on the set it's scored on. **Kept 800** (the spec's size): no measured
+  gain, and 450 costs 1.8× the chunks and embedding time. Chunk size stays a Part 5 question,
+  on a larger set.
+- Some held-out labels may be narrow (INTU seasonality is also discussed in Item 8 notes,
+  ADI's industrial mix in Item 1). Kept as committed.
