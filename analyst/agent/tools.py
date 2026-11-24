@@ -54,6 +54,15 @@ COVER_SHARES = "dei:EntityCommonStockSharesOutstanding"
 MATCH_CUTOFF = 0.75
 
 
+@dataclass(frozen=True)
+class Excerpt:
+    """Source material a workflow gives the agent up front: a citation and the JSON item
+    the model sees (filing text, a computed delta...). `ToolBox.preload` assigns its ref."""
+
+    citation: AnyCitation
+    item: dict[str, Any]
+
+
 class ToolError(Exception):
     """A tool could not run; the message goes back to the model as an error result."""
 
@@ -246,6 +255,11 @@ class ToolBox:
         n = len(self.refs) + 1
         self.refs[n] = citation
         return n
+
+    def preload(self, excerpts: Sequence[Excerpt]) -> str:
+        """Register excerpts as citable refs; returns the JSON the model is shown."""
+        items = [{"ref": self._register(e.citation), **e.item} for e in excerpts]
+        return json.dumps({"results": items}, default=str)
 
     # dispatch -------------------------------------------------------------------------
     def run(self, name: str, raw_input: dict[str, Any]) -> str:
@@ -688,21 +702,28 @@ def flow(d: CompanyData, item: str) -> tuple[Operand | None, str]:
     return (d.fy_op(item, year) if year else None), f"FY{year}" if year else "none"
 
 
-def ebitda_flow(d: CompanyData) -> tuple[Operand | None, str]:
+def ebitda_parts(d: CompanyData) -> tuple[Operand | None, Operand | None, str]:
+    """(operating income, D&A, basis) over one window: both LTM to the same date, else
+    both from the same fiscal year."""
     oi, oi_basis = flow(d, "operating_income")
     da, da_basis = flow(d, "d_and_a")
     if oi_basis != da_basis:  # same window for both legs, else fall back to the same FY
         year = target_year(d, "operating_income", None)
         if year is None:
-            return None, "none"
-        oi, da, oi_basis = d.fy_op("operating_income", year), d.fy_op("d_and_a", year), f"FY{year}"
+            return None, None, "none"
+        return d.fy_op("operating_income", year), d.fy_op("d_and_a", year), f"FY{year}"
+    return oi, da, oi_basis
+
+
+def ebitda_flow(d: CompanyData) -> tuple[Operand | None, str]:
+    oi, da, oi_basis = ebitda_parts(d)
     e = fin.ebitda(oi, da)
     return (
         e.as_operand(f"{d.co.ticker} EBITDA {oi_basis}") if e.value is not None else None
     ), oi_basis
 
 
-def _price(d: CompanyData, prices: PriceProvider) -> Operand | None:
+def price_of(d: CompanyData, prices: PriceProvider) -> Operand | None:
     q = prices.latest(d.co.ticker)
     return q.as_operand() if q else None
 
@@ -748,7 +769,7 @@ def _compute_one(s: Session, co: Company, args: ComputeInput, prices: PriceProvi
         return labelled(fin.margin(d.fy_op(num, year), rev, m), f"{t} {m} FY{year}")
 
     # market-based metrics: latest price from the price file, latest balance sheet
-    price = _price(d, prices)
+    price = price_of(d, prices)
     notes = [] if price else [f"no price for {t} in the price file"]
     if args.fiscal_year is not None and m != "pe":
         notes.append(

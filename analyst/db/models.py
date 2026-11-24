@@ -10,14 +10,16 @@ from sqlalchemy import (
     BigInteger,
     Computed,
     Date,
+    DateTime,
     ForeignKey,
     Index,
     Integer,
     Numeric,
     String,
     Text,
+    func,
 )
-from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -155,3 +157,23 @@ class Chunk(Base):
 def indexed_text(context: str, text: str) -> str:
     """What the embedder and reranker read: header, blank line, chunk text."""
     return f"{context}\n\n{text}" if context else text
+
+
+# -- Part 4: workflow runs ------------------------------------------------------------------
+
+
+class WorkflowRun(Base):
+    """One run of a workflow (comps, tearsheet, earnings): inputs, outputs, trace, cost."""
+
+    __tablename__ = "workflow_runs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    type: Mapped[str] = mapped_column(String(32), index=True)
+    inputs: Mapped[dict] = mapped_column(JSONB)
+    status: Mapped[str] = mapped_column(String(16))  # running | succeeded | failed
+    outputs: Mapped[dict | None] = mapped_column(JSONB)
+    trace: Mapped[dict | None] = mapped_column(JSONB)
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

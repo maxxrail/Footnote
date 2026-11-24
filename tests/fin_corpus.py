@@ -201,3 +201,62 @@ def seed(session_factory: SessionFactory, raw: Path | None = None) -> dict[str, 
                 f"BANK {concept} FY2025",
             )
     return ids
+
+
+# FAB (cik 3): a second semis peer with FY2025 facts and a cover-page share count, for comps.
+FAB_FY2025: dict[str, Decimal | int] = {
+    "Revenues": 800 * M,
+    "OperatingIncomeLoss": 160 * M,
+    "DepreciationDepletionAndAmortization": 40 * M,
+    "NetIncomeLoss": 120 * M,
+    "LongTermDebt": 100 * M,
+    "CashAndCashEquivalentsAtCarryingValue": 50 * M,
+    "Assets": 2000 * M,
+}
+
+
+def seed_peer(session_factory: SessionFactory) -> None:
+    with session_factory() as s:
+        s.add(Company(cik=3, ticker="FAB", name="Fab Inc", fiscal_year_end="1231"))
+        s.flush()
+        acc = "0000000003-26-000001"
+        s.add(
+            Filing(
+                accession=acc,
+                cik=3,
+                form="10-K",
+                filed_at=dt.date(2026, 2, 20),
+                url=f"https://www.sec.gov/Archives/edgar/data/3/{acc}/{acc}.htm",
+            )
+        )
+        s.flush()
+        fid = 900
+        for concept, value in FAB_FY2025.items():
+            fid += 1
+            instant = concept in INSTANT or concept == "Assets"
+            s.add(
+                Fact(
+                    id=fid,
+                    cik=3,
+                    concept=f"us-gaap:{concept}",
+                    unit="USD",
+                    value=Decimal(value),
+                    period_start=None if instant else dt.date(2025, 1, 1),
+                    period_end=dt.date(2025, 12, 31),
+                    form="10-K",
+                    accession=acc,
+                )
+            )
+        s.add(
+            Fact(
+                id=fid + 1,
+                cik=3,
+                concept="dei:EntityCommonStockSharesOutstanding",
+                unit="shares",
+                value=Decimal(40 * M),
+                period_start=None,
+                period_end=dt.date(2026, 2, 10),
+                form="10-K",
+                accession=acc,
+            )
+        )

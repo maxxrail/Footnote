@@ -223,6 +223,12 @@ def _citations(session: Session, ranked: Sequence[tuple[int, float]]) -> list[Ci
     return out
 
 
+def chunk_citations(session: Session, chunk_ids: Sequence[int]) -> list[Citation]:
+    """Citations for given chunks, in the given order (for workflows that pick chunks by
+    section rather than by search)."""
+    return _citations(session, [(i, 0.0) for i in chunk_ids])
+
+
 def search(
     query: str,
     cik: int | None = None,
