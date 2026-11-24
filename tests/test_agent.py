@@ -194,7 +194,7 @@ def test_compute_valuation(box: ToolBox) -> None:
     assert compute(box, "market_cap")["value"] == "5000000000"
     ev = compute(box, "enterprise_value")
     assert ev["value"] == "4850000000"  # 5,000 + 250 debt - 400 cash ($M)
-    assert compute(box, "ev_to_revenue")["label"] == "CHIP EV / revenue (LTM)"
+    assert compute(box, "ev_to_revenue")["label"] == "CHIP EV / revenue (LTM to 2025-12-31)"
     assert Decimal(compute(box, "ev_to_revenue")["value"]).quantize(Decimal("1e-6")) == Decimal(
         "3.233333"
     )
@@ -387,7 +387,8 @@ def test_uncited_number_is_flagged_after_repair(box: ToolBox) -> None:
     ]
     llm = ScriptedLLM([[tool_call("compute", metric="growth", tickers=["CHIP"])], uncited, uncited])
     a = run("q", llm, box)
-    assert a.uncited_numbers == ["25%"] and a.unverified_numbers == []
+    assert a.uncited_numbers == ["25%", "(answer cites nothing)"]
+    assert a.unverified_numbers == []
 
 
 def test_refusal_for_company_outside_universe(box: ToolBox) -> None:
@@ -498,3 +499,191 @@ def test_cost_accounting() -> None:
     assert (u.calls, u.input_tokens, u.cost_usd) == (2, 2000, Decimal("0.014"))
     u.add("mystery", U())
     assert u.cost_usd is None
+
+
+# -- review fixes --------------------------------------------------------------------------
+
+
+def test_invented_number_caught_after_get_financials(box: ToolBox) -> None:
+    """A real trace has dates (2025-12-31), accessions and ref ids: none may verify '31%'."""
+    bad = lambda msgs: [  # noqa: E731
+        tool_call("submit_answer", text="Revenue grew 31% [^4].", confidence="high", refused=False)
+    ]
+    llm = ScriptedLLM(
+        [
+            [
+                tool_call("get_financials", ticker="CHIP", metrics=["revenue"]),
+                tool_call("compute", metric="growth", tickers=["CHIP"]),
+            ],
+            bad,
+            bad,
+        ]
+    )
+    a = run("How fast did CHIP grow?", llm, box)
+    assert a.unverified_numbers == ["31%"] and a.confidence == "low"
+
+
+def test_repair_turn_counts_toward_the_step_limit(box: ToolBox) -> None:
+    bad = lambda msgs: [  # noqa: E731
+        tool_call("submit_answer", text="Revenue grew 31% [^1].", confidence="high", refused=False)
+    ]
+    turns: list[Any] = [[tool_call("compute", metric="growth", tickers=["CHIP"])]] * 9 + [bad, bad]
+    llm = ScriptedLLM(turns)
+    a = run("q", llm, box)
+    assert len(llm.requests) == 10  # the 10th call submitted; no 11th call for the repair
+    assert a.trace.stop == "max_steps" and a.unverified_numbers == ["31%"]
+
+
+def test_unexpected_tool_exception_goes_back_as_an_error(box: ToolBox, tmp_path: Path) -> None:
+    bad_prices = tmp_path / "bad.csv"
+    bad_prices.write_text("ticker,date,close\nCHIP,yesterday,1\n", encoding="utf-8")
+    box.prices = CsvPriceProvider(bad_prices)
+    llm = ScriptedLLM(
+        [
+            [tool_call("compute", metric="pe", tickers=["CHIP"])],
+            [
+                tool_call(
+                    "submit_answer", text="Not in the filings.", confidence="low", refused=True
+                )
+            ],
+        ]
+    )
+    a = run("q", llm, box)
+    err = llm.requests[1]["messages"][-1]["content"][0]
+    assert err["is_error"] and "internal error in compute: ValueError" in err["content"]
+    assert a.trace.steps[0].error
+
+
+def test_refs_are_reset_per_run(box: ToolBox) -> None:
+    call(box, "get_financials", ticker="CHIP", metrics=["revenue"])
+    assert box.refs
+    llm = ScriptedLLM(
+        [
+            [
+                tool_call(
+                    "submit_answer",
+                    text="Revenue was $1.50B [^1].",
+                    confidence="high",
+                    refused=False,
+                )
+            ]
+        ]
+        * 2
+    )
+    a = run("q", llm, box)
+    assert a.uncited_numbers == ["[^1]", "(answer cites nothing)"]  # old ref 1 not known
+
+
+def test_ebitda_never_mixes_ltm_windows(box: ToolBox, session_factory: SessionFactory) -> None:
+    """Operating income LTM ends 2025-12-31 but D&A's last four quarters end 2025-03-31:
+    EBITDA must fall back to the same fiscal year for both, not mix the windows."""
+    import datetime as dt
+
+    from sqlalchemy import delete
+
+    from analyst.agent.tools import _Data, _flow
+    from analyst.db.models import Company, Fact, Filing
+
+    def q(year: int, n: int) -> tuple[dt.date, dt.date]:
+        starts = [(1, 1), (4, 1), (7, 1), (10, 1)]
+        ends = [(3, 31), (6, 30), (9, 30), (12, 31)]
+        return dt.date(year, *starts[n - 1]), dt.date(year, *ends[n - 1])
+
+    with session_factory() as s:
+        fid = 1000
+        for year, n in [(2024, 1), (2024, 2), (2024, 3), (2025, 1), (2025, 2), (2025, 3)]:
+            acc = f"0000000001-{year % 100}-0009{n}{year % 10}"
+            start, end = q(year, n)
+            s.add(Filing(accession=acc, cik=1, form="10-Q", filed_at=end, url="u"))
+            s.flush()
+            items = [("OperatingIncomeLoss", 100 * M)]
+            if year == 2024 or n == 1:
+                items.append(("DepreciationDepletionAndAmortization", 15 * M))
+            for concept, value in items:
+                fid += 1
+                s.add(
+                    Fact(
+                        id=fid, cik=1, concept=f"us-gaap:{concept}", unit="USD", value=value,
+                        period_start=start, period_end=end, form="10-Q", accession=acc,
+                    )
+                )  # fmt: skip
+        # D&A has no FY2025 fact, so its own latest window is the LTM to 2025-03-31
+        s.execute(
+            delete(Fact).where(
+                Fact.concept == "us-gaap:DepreciationDepletionAndAmortization",
+                Fact.period_end == dt.date(2025, 12, 31),
+            )
+        )
+    with session_factory() as s:
+        assert _flow(_Data(s, s.get(Company, 1)), "d_and_a")[1] == "LTM to 2025-03-31"  # type: ignore[arg-type]
+        assert _flow(_Data(s, s.get(Company, 1)), "operating_income")[1] == "LTM to 2025-12-31"  # type: ignore[arg-type]
+    e = compute(box, "ev_to_ebitda")
+    # windows differ -> same fiscal year for both legs -> FY2025 D&A is missing -> no value
+    assert e["label"] == "CHIP EV / EBITDA (FY2025)"
+    assert e["value"] is None
+
+
+def test_market_metric_notes(box: ToolBox) -> None:
+    ev = compute(box, "enterprise_value", fiscal_year=2023)
+    assert "fiscal_year 2023 ignored" in ev["note"]
+    assert compute(box, "pe", "BANK")["label"] == "BANK P/E (FY2025 diluted EPS)"
+
+
+def test_balance_sheet_dates_that_differ_are_noted(
+    box: ToolBox, session_factory: SessionFactory
+) -> None:
+    import datetime as dt
+
+    from analyst.db.models import Fact, Filing
+
+    with session_factory() as s:
+        s.add(
+            Filing(
+                accession="0000000001-26-000099",
+                cik=1,
+                form="10-Q",
+                filed_at=dt.date(2026, 5, 1),
+                url="u",
+            )
+        )
+        s.flush()
+        s.add(
+            Fact(
+                id=5000, cik=1, concept="us-gaap:CashAndCashEquivalentsAtCarryingValue", unit="USD",
+                value=500 * M, period_start=None, period_end=dt.date(2026, 3, 31), form="10-Q",
+                accession="0000000001-26-000099",
+            )
+        )  # fmt: skip
+    ev = compute(box, "enterprise_value")
+    assert "different dates" in ev["note"] and "cash at 2026-03-31" in ev["note"]
+
+
+def test_stale_ltm_loses_to_a_newer_fiscal_year(
+    box: ToolBox, session_factory: SessionFactory
+) -> None:
+    """FY2026 revenue is filed but no FY2026 quarters are: the 2025 LTM is older, so
+    EV / revenue must use FY2026, not call the stale window 'LTM'."""
+    import datetime as dt
+
+    from analyst.db.models import Fact, Filing
+
+    with session_factory() as s:
+        s.add(
+            Filing(
+                accession="0000000001-27-000001",
+                cik=1,
+                form="10-K",
+                filed_at=dt.date(2027, 2, 15),
+                url="u",
+            )
+        )
+        s.flush()
+        s.add(
+            Fact(
+                id=6000, cik=1, concept="us-gaap:Revenues", unit="USD", value=2000 * M,
+                period_start=dt.date(2026, 1, 1), period_end=dt.date(2026, 12, 31), form="10-K",
+                accession="0000000001-27-000001",
+            )
+        )  # fmt: skip
+    r = compute(box, "ev_to_revenue")
+    assert r["label"] == "CHIP EV / revenue (FY2026)"

@@ -2,13 +2,15 @@
 
     answer = run(question, llm, toolbox)
 
-- At most `MAX_STEPS` model calls. Several tool calls in one turn are all executed and
-  their results go back in a single user message (one tool_result each, errors included).
+- At most `MAX_STEPS` model calls, the repair turn included. Several tool calls in one
+  turn are all executed and their results go back in a single user message (one
+  tool_result each, errors included).
 - The model ends by calling `submit_answer`. The answer then goes through the number
-  post-check (`analyst.agent.postcheck`). If a number doesn't match any tool output, isn't
-  cited, or a `[^ref]` is unknown, the model gets **one** repair turn (an error result for
-  its `submit_answer` call listing the problems). After that the answer is returned with
-  the problems listed in `unverified_numbers` / `uncited_numbers`, never silently passed.
+  post-check (`analyst.agent.postcheck`). If a number doesn't match the cited tool output,
+  isn't cited, or a `[^ref]` is unknown, the model gets **one** repair turn (an error result
+  for its `submit_answer` call listing the problems). After that the answer is returned with
+  the problems in `unverified_numbers` / `miscited_numbers` / `uncited_numbers`, and low
+  confidence, never silently passed.
 - Every model call and tool call is timed and recorded in `Answer.trace`, with tokens and
   dollar cost summed in `trace.usage`.
 
@@ -78,6 +80,7 @@ class Answer(BaseModel):
     refused: bool
     unverified_numbers: list[str] = Field(default_factory=list)
     uncited_numbers: list[str] = Field(default_factory=list)
+    miscited_numbers: list[str] = Field(default_factory=list)
     trace: Trace
 
 
@@ -106,6 +109,7 @@ def run(
     system: str = SYSTEM_PROMPT,
 ) -> Answer:
     started = time.perf_counter()
+    toolbox.refs.clear()  # refs are per run; a reused toolbox must not carry old ones
     tools = tool_definitions()
     messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
     trace = Trace()
@@ -132,15 +136,18 @@ def run(
             confidence=sub.confidence if res.ok else "low",
             refused=sub.refused,
             unverified_numbers=res.unverified_numbers,
-            uncited_numbers=res.uncited_numbers + [f"[^{r}]" for r in res.unknown_refs],
+            uncited_numbers=res.uncited_numbers
+            + [f"[^{r}]" for r in res.unknown_refs]
+            + (["(answer cites nothing)"] if res.no_citations else []),
+            miscited_numbers=res.miscited_numbers,
             trace=trace,
         )
 
     def review(sub: SubmitAnswerInput) -> postcheck.CheckResult:
-        return postcheck.check(sub.text, outputs, question, toolbox.refs)
+        return postcheck.check(sub.text, outputs, question, toolbox.refs, sub.refused)
 
     step = 0
-    while step < max_steps + (1 if repair_used else 0):
+    while step < max_steps:  # the repair turn counts toward the limit
         step += 1
         t0 = time.perf_counter()
         resp = llm.create(system=system, messages=messages, tools=tools)
@@ -201,6 +208,8 @@ def run(
                     out, err = toolbox.run(b.name, dict(b.input)), False
                 except ToolError as exc:
                     out, err = f"error: {exc}", True
+                except Exception as exc:  # a bug or bad data must not crash the run
+                    out, err = f"internal error in {b.name}: {type(exc).__name__}: {exc}", True
                 outputs.append(out)
             trace.steps.append(
                 Step(

@@ -585,19 +585,28 @@ def _target_year(d: _Data, item: str, requested: int | None) -> int | None:
     return years[-1] if years else None
 
 
+def _ltm_end(c: Computed) -> dt.date | None:
+    ends = [o.period_end for o in c.inputs if o.period_end is not None]
+    return max(ends) if ends else None
+
+
 def _flow(d: _Data, item: str) -> tuple[Operand | None, str]:
-    """LTM of a flow item if four contiguous quarters exist, else the latest fiscal year."""
+    """LTM of a flow item if four contiguous quarters exist and end no earlier than the
+    latest fiscal year; otherwise the latest fiscal year. The basis names the window
+    ("LTM to 2025-12-31" or "FY2025") so two flows can be checked for the same window."""
     last12 = d.ltm_op(item)
-    if last12.value is not None:
-        return last12.as_operand(f"{d.co.ticker} {item} LTM"), "LTM"
     year = _target_year(d, item, None)
+    fy_end = d.fy(item)[year].period_end if year is not None else None
+    end = _ltm_end(last12)
+    if last12.value is not None and end is not None and (fy_end is None or end >= fy_end):
+        return last12.as_operand(f"{d.co.ticker} {item} LTM to {end}"), f"LTM to {end}"
     return (d.fy_op(item, year) if year else None), f"FY{year}" if year else "none"
 
 
 def _ebitda_flow(d: _Data) -> tuple[Operand | None, str]:
     oi, oi_basis = _flow(d, "operating_income")
     da, da_basis = _flow(d, "d_and_a")
-    if oi_basis != da_basis:  # don't mix an LTM numerator with an FY one
+    if oi_basis != da_basis:  # same window for both legs, else fall back to the same FY
         year = _target_year(d, "operating_income", None)
         if year is None:
             return None, "none"
@@ -655,23 +664,40 @@ def _compute_one(s: Session, co: Company, args: ComputeInput, prices: PriceProvi
 
     # market-based metrics: latest price from the price file, latest balance sheet
     price = _price(d, prices)
-    price_note = "" if price else f"no price for {t} in the price file"
+    notes = [] if price else [f"no price for {t} in the price file"]
+    if args.fiscal_year is not None and m != "pe":
+        notes.append(
+            f"fiscal_year {args.fiscal_year} ignored: uses the latest price and balance sheet"
+        )
+    debt, cash = d.latest_instant("total_debt"), d.latest_instant("cash")
+    shares = d.latest_instant("shares_outstanding")
+    used = [o for o in (debt, cash, shares) if o is not None]
+    if len({o.period_end for o in used}) > 1:
+        notes.append(
+            "balance-sheet inputs are from different dates: "
+            + ", ".join(f"{o.label.split()[1]} at {o.period_end}" for o in used)
+        )
+    price_note = "; ".join(notes)
     if m == "pe":
         year = _target_year(d, "eps_diluted", args.fiscal_year)
         eps = d.fy_op("eps_diluted", year) if year else None
-        return labelled(fin.pe(price, eps), f"{t} P/E (FY{year} diluted EPS)", price_note)
+        basis = f"FY{year} diluted EPS" if year else "no diluted EPS reported"
+        pe_note = "" if price else f"no price for {t} in the price file"
+        return labelled(fin.pe(price, eps), f"{t} P/E ({basis})", pe_note)
     if m == "net_debt_to_ebitda":
         eb, basis = _ebitda_flow(d)
-        c = fin.net_debt_to_ebitda(d.latest_instant("total_debt"), d.latest_instant("cash"), eb)
-        return labelled(c, f"{t} net debt / EBITDA ({basis})")
-    mc = labelled(
-        fin.market_cap(price, d.latest_instant("shares_outstanding")), f"{t} market cap", price_note
-    )
+        c = fin.net_debt_to_ebitda(debt, cash, eb)
+        return labelled(
+            c,
+            f"{t} net debt / EBITDA ({basis})",
+            "; ".join(n for n in notes if not n.startswith("no price")),
+        )
+    mc = labelled(fin.market_cap(price, shares), f"{t} market cap", price_note)
     if m == "market_cap":
         return mc
     mco = mc.as_operand(f"{t} market cap") if mc.value is not None else None
     ev = labelled(
-        fin.enterprise_value(mco, d.latest_instant("total_debt"), d.latest_instant("cash")),
+        fin.enterprise_value(mco, debt, cash),
         f"{t} enterprise value",
         price_note,
     )

@@ -91,10 +91,10 @@ MUTS = [
     (
         "invented numbers are caught (everything matches)",
         POST,
-        "def matches(n: Num, values: set[Decimal]) -> bool:\n",
-        "def matches(n: Num, values: set[Decimal]) -> bool:\n    return True\n",
+        "def matches(n: Num, values: Iterable[Val]) -> bool:\n",
+        "def matches(n: Num, values: Iterable[Val]) -> bool:\n    return True\n",
         [
-            T_P + "test_invented_number_is_caught",
+            T_P + "test_invented_percent_is_caught_in_a_realistic_trace",
             T_P + "test_llm_arithmetic_is_caught",
             T_A + "test_number_still_invented_after_repair_is_flagged",
         ],
@@ -107,17 +107,17 @@ MUTS = [
         [T_P + "test_rounding_tolerance_follows_written_precision"],
     ),
     (
-        "percent matches a ratio (no x100)",
+        "a ratio is a percentage (no x100)",
         POST,
-        "if n.pct and abs(n.value - v * 100) <= n.tol:",
-        "if False:",
-        [T_P + "test_percent_matches_a_ratio"],
+        'yield Val(v * 100, "pct", True)',
+        'yield Val(v, "pct", True)',
+        [T_P + "test_percent_written_more_precisely_than_display_uses_the_ratio"],
     ),
     (
         "numbers must be cited (every sentence counts as cited)",
         POST,
-        "cited = bool(MARKER.search(sentence))",
-        "cited = True",
+        "cited_refs = {int(r) for r in MARKER.findall(sentence)} & known",
+        "cited_refs = known",
         [
             T_P + "test_uncited_number_is_flagged",
             T_A + "test_uncited_number_is_flagged_after_repair",
@@ -126,7 +126,7 @@ MUTS = [
     (
         "unknown [^ref] markers are flagged (ignored)",
         POST,
-        "result.unknown_refs = sorted({int(r) for r in MARKER.findall(text)} - known)",
+        "result.unknown_refs = sorted(markers - known)",
         "result.unknown_refs = []",
         [T_P + "test_unknown_ref_is_flagged"],
     ),
@@ -136,6 +136,61 @@ MUTS = [
         "    for pat in _LABELS:\n",
         "    for pat in []:\n",
         [T_P + "test_labels_are_not_numbers"],
+    ),
+    (
+        "tool values are typed: ids, dates, accessions don't count (raw digits count)",
+        POST,
+        '    excerpt = item.get("excerpt")\n',
+        "    for raw_digits in __import__('re').findall(r'\\d+', json.dumps(item)):\n"
+        "        yield Val(Decimal(raw_digits), 'pct', False)\n"
+        "        yield Val(Decimal(raw_digits), 'mult', False)\n"
+        '    excerpt = item.get("excerpt")\n',
+        [
+            T_P + "test_invented_percent_is_caught_in_a_realistic_trace",
+            T_A + "test_invented_number_caught_after_get_financials",
+        ],
+    ),
+    (
+        "units must agree (any kind matches)",
+        POST,
+        'if v.kind != n.kind and not (n.bare and v.kind == "mult"):',
+        "if False:",
+        [T_P + "test_units_must_agree"],
+    ),
+    (
+        "a number must be in the cited ref (any ref will do)",
+        POST,
+        "if cited_refs and matches(n, cited_vals):",
+        "if cited_refs and matches(n, every):",
+        [T_P + "test_number_from_another_ref_is_miscited"],
+    ),
+    (
+        "sign must agree (ignored)",
+        POST,
+        "if n.sign and v.signed and v.value != 0 and (v.value > 0) != (n.sign > 0):",
+        "if False:",
+        [T_P + "test_sign_must_agree"],
+    ),
+    (
+        "question numbers only as a comparison (always fine)",
+        POST,
+        "if echoes and not verified_here:",
+        "if False:",
+        [T_P + "test_question_numbers_only_as_a_comparison"],
+    ),
+    (
+        "small integers skipped only before a count word (always skipped)",
+        POST,
+        "and bool(_COUNT_WORD.match(stripped, m.end()))",
+        "and True",
+        [T_P + "test_invented_multiple_and_small_number_are_caught"],
+    ),
+    (
+        "a non-refused answer must cite something (no check)",
+        POST,
+        "result.no_citations = not refused and not (markers & known)",
+        "result.no_citations = False",
+        [T_P + "test_answer_must_cite_something_unless_refused"],
     ),
     # -- loop ------------------------------------------------------------------------------
     (
@@ -155,9 +210,30 @@ MUTS = [
     (
         "at most 10 steps (15)",
         LOOP,
-        "while step < max_steps + (1 if repair_used else 0):",
+        "while step < max_steps:",
         "while step < max_steps + 5:",
         [T_A + "test_max_steps"],
+    ),
+    (
+        "the repair turn counts toward the 10 steps (one extra)",
+        LOOP,
+        "while step < max_steps:",
+        "while step < max_steps + (1 if repair_used else 0):",
+        [T_A + "test_repair_turn_counts_toward_the_step_limit"],
+    ),
+    (
+        "unexpected tool exceptions go back as errors (crash the run)",
+        LOOP,
+        "                except Exception as exc:  # a bug or bad data must not crash the run\n",
+        "                except ZeroDivisionError as exc:\n",
+        [T_A + "test_unexpected_tool_exception_goes_back_as_an_error"],
+    ),
+    (
+        "refs reset per run (keep old ones)",
+        LOOP,
+        "    toolbox.refs.clear()",
+        "    pass",
+        [T_A + "test_refs_are_reset_per_run"],
     ),
     (
         "parallel tool results go back in one message (one message each)",
@@ -212,9 +288,30 @@ MUTS = [
     (
         "compute reports a missing price (silently)",
         TOOLS,
-        'price_note = "" if price else f"no price for {t} in the price file"',
-        'price_note = ""',
+        'notes = [] if price else [f"no price for {t} in the price file"]',
+        "notes = []",
         [T_A + "test_compute_refuses_negative_pe_and_missing_price"],
+    ),
+    (
+        "EBITDA legs share one LTM window (any two LTMs)",
+        TOOLS,
+        'return last12.as_operand(f"{d.co.ticker} {item} LTM to {end}"), f"LTM to {end}"',
+        'return last12.as_operand(f"{d.co.ticker} {item} LTM to {end}"), "LTM"',
+        [T_A + "test_ebitda_never_mixes_ltm_windows"],
+    ),
+    (
+        "LTM is not older than the latest fiscal year (any LTM)",
+        TOOLS,
+        "(fy_end is None or end >= fy_end)",
+        "True",
+        [T_A + "test_stale_ltm_loses_to_a_newer_fiscal_year"],
+    ),
+    (
+        "balance-sheet inputs from different dates are noted (silent)",
+        TOOLS,
+        "    if len({o.period_end for o in used}) > 1:\n",
+        "    if False:\n",
+        [T_A + "test_balance_sheet_dates_that_differ_are_noted"],
     ),
     # -- cost ------------------------------------------------------------------------------
     (
@@ -241,6 +338,8 @@ for name, path, old, new, tests in MUTS:
             text=True,
         )
         last = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else r.stderr[-200:]
+        if "no tests ran" in last or "not found" in last or "ERROR" in r.stdout[-400:]:
+            raise SystemExit(f"mutation {name!r}: its tests did not run: {last}")
         caught = r.returncode != 0
         missed += not caught
         print(f"{'CAUGHT' if caught else 'MISSED'} | {name} | {last}", flush=True)

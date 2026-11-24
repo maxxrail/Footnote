@@ -55,6 +55,8 @@ def format_answer(a: Answer) -> str:
         flags.append(f"UNVERIFIED NUMBERS: {a.unverified_numbers}")
     if a.uncited_numbers:
         flags.append(f"UNCITED: {a.uncited_numbers}")
+    if a.miscited_numbers:
+        flags.append(f"MISCITED: {a.miscited_numbers}")
     if flags:
         lines += [*flags, ""]
     t = a.trace
