@@ -5,6 +5,38 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-24: Part 4, banker deliverables
+
+### Added
+- `analyst/workflows/base.py`: `Workflow` with typed inputs, deterministic or agent `Step`s and
+  typed outputs. Runs are stored in `workflow_runs` (inputs, status, outputs, trace, cost_usd,
+  created_at); migration `dca8d10fc542`.
+- `analyst/workflows/comps.py`: public comps to `comps_{TICKER}_{date}.xlsx`.
+  - Inputs sheet: blue values, each with a citation comment.
+  - Comps sheet: live formulas, NM rule, peer median/mean/quartiles, `0.0x` and `$#,##0,,` formats, frozen header.
+  - Sources sheet. Peer override with `--peers` (ADR 0006).
+- `analyst/workflows/tearsheet.py`: one-page PDF + Markdown.
+  - Agent-written business summary (Item 1) and top 5 risks (Item 1A), cited.
+  - 5-year XBRL table, matplotlib margin chart, valuation snapshot from comps.
+  - Stock-split warning for per-share values.
+- `analyst/workflows/earnings.py`: earnings brief.
+  - Deterministic YoY deltas and margin changes in pp.
+  - MD&A drivers (agent, cited).
+  - Risk-factor paragraph diff of the 10-Q against the prior 10-K.
+- `python -m analyst.workflows run {comps,tearsheet,earnings} --ticker T [--peers ...] [--out DIR]`.
+- `loop.run(context=...)`: a workflow can hand the agent source material (filing excerpts,
+  computed deltas) as citable refs that the post-check accepts.
+- `fin.difference`; the post-check reads "pp", "percentage points", "bps" and "basis points".
+- `examples/`: comps for MSFT, NVDA and JPM, an NVDA tearsheet and an MSFT earnings brief.
+- `scripts/mutation_check_part4.py`: 18 guarantees, each broken on purpose and caught.
+
+### Changed
+- Market cap uses the newer of the balance-sheet and cover-page share counts
+  (`dei:EntityCommonStockSharesOutstanding`). This fills Citigroup, PNC and Texas Instruments;
+  the same 400-day refusal and 100-day note apply.
+- `.gitattributes`: `*.pdf`, `*.xlsx` and `*.png` are binary, so no line-ending conversion
+  (it would corrupt the PDF).
+
 ## [0.3.0] - 2026-11-24: Part 3, the analyst agent
 
 ### Added

@@ -6,7 +6,7 @@ specific SEC filing passage or XBRL fact. It also runs banker workflows end to e
 comps to a formula-driven Excel sheet, one-page tearsheets, and earnings briefs. A real eval
 harness measures how accurate it is.
 
-> Status: Part 3 of 6 in review (v0.3.0: data layer, filing search, and the cited analyst agent). See [PROGRESS.md](PROGRESS.md).
+> Status: Part 4 of 6 in review (v0.4.0: data layer, filing search, the cited analyst agent, and banker deliverables). See [PROGRESS.md](PROGRESS.md).
 
 ## What's inside (built in 6 parts)
 1. **Data layer**: SEC EDGAR + XBRL ingestion into Postgres, normalized and traceable
@@ -175,6 +175,66 @@ uv run pytest -m live tests/test_agent_live.py -s       # the 5 sample questions
 uv run python scripts/fetch_prices.py                   # refresh data/prices.csv (25 requests)
 uv run python scripts/mutation_check_part3.py           # 48 guarantees, each broken once
 ```
+
+## Part 4: Banker deliverables
+
+Three workflows that produce files, not chat answers. Open them in [`examples/`](examples/)
+without running anything.
+
+| Workflow | Output | Example |
+|---|---|---|
+| Public comps | Excel workbook with live formulas | [`comps_MSFT`](examples/comps_MSFT_2026-11-24.xlsx), [`comps_NVDA`](examples/comps_NVDA_2026-11-24.xlsx), [`comps_JPM`](examples/comps_JPM_2026-11-24.xlsx) |
+| Tearsheet | One-page PDF (+ Markdown, chart PNG) | [`tearsheet_NVDA.pdf`](examples/tearsheet_NVDA_2026-11-24.pdf) |
+| Earnings brief | Markdown | [`earnings_MSFT_FY2027Q1.md`](examples/earnings_MSFT_FY2027Q1.md) |
+
+```powershell
+uv run python -m analyst.workflows run comps --ticker MSFT                 # deterministic, free
+uv run python -m analyst.workflows run comps --ticker MSFT --peers ORCL,CRM,ADBE
+uv run python -m analyst.workflows run tearsheet --ticker NVDA             # ~$0.04 (agent steps)
+uv run python -m analyst.workflows run earnings --ticker MSFT              # ~$0.05
+uv run python scripts/mutation_check_part4.py                              # 18 guarantees, each broken once
+```
+
+Every run is stored in the `workflow_runs` table: inputs, status, output paths, a trace of
+every step (deterministic or agent) with timings, and its dollar cost.
+
+**Comps workbook** ([ADR 0006](docs/adr/0006-comps-workbook.md))
+- **Inputs:** raw values in blue (price, shares, debt, cash, revenue, operating income, D&A,
+  net income). Hover any value for its filing (concept, period, form, accession, fact id) or
+  its price row.
+- **Comps:** market cap, EV, EBITDA, EV/Revenue, EV/EBITDA and P/E are **Excel formulas** on
+  Inputs, in black. "NM" appears when an input is missing or a denominator isn't positive.
+  Median, mean and 25th/75th percentiles cover the peers only (Excel skips "NM"); `n` counts the
+  peers with a value. Frozen header, `0.0x` multiples, $ in millions.
+- **Sources:** every filing used, with its sec.gov link.
+- **Tests:** they recalculate the workbook with the `formulas` package and compare every cell
+  to `analyst.metrics`.
+- **Limits:**
+  - Revenue and net income are usually LTM, but EBITDA often falls back to the latest fiscal
+    year, because quarterly D&A is rarely tagged. Each row's basis is shown.
+  - For banks only P/E is meaningful.
+
+<!-- Screenshot placeholder: Comps sheet of examples/comps_MSFT_2026-11-24.xlsx opened in Excel -->
+_[Screenshot: the Comps sheet in Excel goes here once it's opened by hand.]_
+
+**Tearsheet**
+- **Business:** the agent summarizes the latest 10-K's Item 1, cited.
+- **Financial summary:** the last 5 fiscal years from XBRL, one footnote per row with its facts.
+- **Margin chart:** computed in `analyst.metrics`.
+- **Top 5 risk factors:** the agent reads Item 1A, cited.
+- **Valuation snapshot:** from the comps workflow.
+- **Checks:** agent sections go through the number post-check and are labelled if flagged. A
+  stock split that leaves early EPS values unadjusted is detected and noted (NVIDIA FY2022 →
+  FY2023, 10.1x).
+
+![Tearsheet page 1](docs/img/tearsheet_NVDA_page1.png)
+
+**Earnings brief** (latest 10-Q vs the same quarter a year earlier)
+- **Key metric deltas:** computed, including margin changes in percentage points.
+- **MD&A drivers:** the agent cites the MD&A, and its numbers must match the computed deltas.
+- **Risk factors:** a paragraph diff of the 10-Q's Item 1A against the prior 10-K's. If nothing
+  is new, the brief cites the 10-Q's own "no material changes" line and makes no model call.
+  Otherwise the agent summarizes the new paragraphs.
 
 ## Quick start (fills in as parts land)
 ```powershell
