@@ -45,8 +45,9 @@ extend-exclude = ["analyst/db/migrations/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
-# SEC filings use typographic quotes and dashes; the parser matches them on purpose.
-allowed-confusables = ["’", "–", "—", "“", "”"]
+# SEC filings and model answers use typographic quotes, dashes, minus and multiplication
+# signs; the parser and the number post-check match them on purpose.
+allowed-confusables = ["’", "–", "—", "“", "”", "−", "×"]
 
 [tool.mypy]
 python_version = "3.12"

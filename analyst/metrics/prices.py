@@ -32,6 +32,7 @@ class PriceQuote:
             source="price",
             detail=f"{self.source}: {self.ticker},{self.date.isoformat()},{self.close}",
             period_end=self.date,
+            unit="USD/shares",
         )
 
 

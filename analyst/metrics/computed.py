@@ -28,6 +28,7 @@ class Operand:
     detail: str = ""  # accession, price date, or the formula of a computed input
     period_start: dt.date | None = None
     period_end: dt.date | None = None
+    unit: str = ""  # "USD", "USD/shares", "shares", "ratio", "x" (empty if unknown)
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,7 @@ class Computed:
             fact_ids=self.fact_ids,
             source="computed",
             detail=self.formula,
+            unit=self.unit,
         )
 
 
