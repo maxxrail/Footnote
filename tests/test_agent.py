@@ -729,3 +729,67 @@ def test_safe_print_survives_a_narrow_console(monkeypatch: pytest.MonkeyPatch) -
     safe_print("CAGR was −5.7% [^1]")  # U+2212 isn't in cp1252
     buf.flush()
     assert buf.buffer.getvalue().startswith(b"CAGR was ?5.7% [^1]")
+
+
+def test_stale_share_count_is_refused_not_used(
+    box: ToolBox, session_factory: SessionFactory
+) -> None:
+    """Citigroup's last share-count tag is from FY2010: a balance more than 180 days older
+    than the latest balance sheet must be refused, not multiplied by today's price."""
+    import datetime as dt
+
+    from analyst.db.models import Fact, Filing
+
+    with session_factory() as s:
+        s.add(
+            Filing(
+                accession="0000000001-26-000077",
+                cik=1,
+                form="10-Q",
+                filed_at=dt.date(2026, 11, 1),
+                url="u",
+            )
+        )
+        s.flush()
+        s.add(
+            Fact(
+                id=7000, cik=1, concept="us-gaap:Assets", unit="USD", value=9000 * M,
+                period_start=None, period_end=dt.date(2027, 3, 31), form="10-Q",
+                accession="0000000001-26-000077",
+            )
+        )  # fmt: skip
+    mc = compute(box, "market_cap")  # shares at 2025-12-31: 455 days old
+    assert mc["value"] is None
+    assert "latest shares_outstanding is from 2025-12-31" in mc["note"]
+    assert "total_debt" not in mc["note"]  # market cap doesn't use debt
+    assert "latest total_debt is from 2025-12-31" in compute(box, "net_debt_to_ebitda")["note"]
+
+
+def test_old_but_usable_share_count_is_used_with_an_age_note(
+    box: ToolBox, session_factory: SessionFactory
+) -> None:
+    import datetime as dt
+
+    from analyst.db.models import Fact, Filing
+
+    with session_factory() as s:
+        s.add(
+            Filing(
+                accession="0000000001-26-000076",
+                cik=1,
+                form="10-Q",
+                filed_at=dt.date(2026, 11, 1),
+                url="u",
+            )
+        )
+        s.flush()
+        s.add(
+            Fact(
+                id=7001, cik=1, concept="us-gaap:Assets", unit="USD", value=9000 * M,
+                period_start=None, period_end=dt.date(2026, 9, 30), form="10-Q",
+                accession="0000000001-26-000076",
+            )
+        )  # fmt: skip
+    mc = compute(box, "market_cap")  # 273 days old: used, with a note
+    assert mc["value"] == "5000000000"
+    assert "shares_outstanding is as of 2025-12-31, 273 days before" in mc["note"]

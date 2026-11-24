@@ -54,7 +54,8 @@
 - P2: Near-duplicate collapsing (same company + section, Jaccard ≥ 0.9) was tried for `orcl-capex` and reverted: recall identical on all three sets (ADR 0004). A second held-out set (`retrieval_holdout2.yaml`) was committed first; every leg scores 10/10 on it.
 - P2: WFC and USB keep Risk Factors and MD&A in Exhibit 13, which isn't downloaded. Their Item 1A/7 are detected but short. Left as-is (ADR 0003 says how to fix).
 - P3: ADR 0005: hand-written tool-use loop over an `LLMClient` protocol (not the SDK tool runner or Managed Agents), answers submitted via a `submit_answer` tool, number post-check with one repair turn.
-- P3: Prices: Stooq (Maxx's choice) blocks automated downloads behind a JavaScript check, so `data/prices.csv` ships header-only and Maxx fills it. Market-based metrics return value null with "no price for X in the price file" until then.
+- P3: Prices: Stooq (Maxx's first choice) blocks automated downloads behind a JavaScript check. When Maxx asked for prices to be added, they came from Yahoo Finance's public chart API instead: no key, no personal data, 25 requests 0.5 s apart, raw responses kept in `data/raw/prices/`. `data/prices.csv` has 525 completed daily closes (2026-10-26 to 2026-11-23). Refresh with `uv run python scripts/fetch_prices.py`.
+- P3: Market cap = latest price x latest reported share count. Checking all 25 with real prices found Citigroup's last `CommonStockSharesOutstanding` is from FY2010 (29.0B, before its 1-for-10 reverse split), which gave a $3.3T market cap. Rule: a balance-sheet input more than 400 days before the latest balance sheet is refused (C, PNC 2014, WDAY 2012). One more than 100 days old is used with an age note (NVDA, CRM, ADSK, JPM, USB tag share counts only in 10-Ks). TXN has none. A split inside the window isn't detected. `dei:EntityCommonStockSharesOutstanding` (cover page) would fill the gaps; not done.
 - P3: Valuation basis: latest price x latest reported shares; debt and cash from the latest balance sheet (10-Q or 10-K); revenue and EBITDA LTM when four contiguous quarters exist (Q4 derived), else the latest fiscal year (the label says which). P/E uses latest FY diluted EPS, because quarterly EPS can't be summed. EBITDA = operating income + D&A, never mixing an LTM and an FY input.
 - P3: `total_debt` is the Part 1 canonical item (LongTermDebt first), so EV may miss short-term borrowings; banks' EV and EBITDA multiples aren't meaningful and aren't special-cased.
 - P3: Ratios are fractions (0.25); tools also return a `display` string ("25.0%", "$1.50B", "9.3x"), so the model can restate a value without doing arithmetic.
@@ -313,8 +314,9 @@ analyst\metrics\finance.py       92      0   100%
 analyst\metrics\prices.py        42      0   100%
 analyst\metrics\quarters.py      64      0   100%
 analyst\metrics\stats.py         35      0   100%
-TOTAL                           273      0   100%
-251 passed, 8 deselected
+analyst\metrics\yahoo.py         42      0   100%
+TOTAL                           315      0   100%
+257 passed, 8 deselected
 All checks passed!                     (ruff)
 80 files already formatted             (ruff format)
 Success: no issues found in 58 source files   (mypy)
@@ -386,7 +388,7 @@ The same behaviour is tested offline with the scripted fake (`test_refusal_for_c
 
 **4. README "Part 3" section with an architecture diagram (Mermaid): PASS**: README.md → "Part 3: The analyst agent".
 
-**Mutation checks** (`uv run python scripts/mutation_check_part3.py`): **46/46** caught.
+**Mutation checks** (`uv run python scripts/mutation_check_part3.py`): **48/48** caught. The 2 newest are the stale-balance refusal and its age note.
 - **History:** the first version had 27, all caught. Review 1 added 13 and review 2 added 6.
 - **Weak tests found and fixed:** ratio-to-percent was masked by `display`; the EBITDA-window test
   never built two LTM windows; the false-"below" comparison case was missing.
@@ -484,6 +486,6 @@ happened in `python -m analyst.agent.ask`. Fixed with `safe_print`, and tested.
 - Real embeddings need `uv sync --extra dev --extra ml` (CPU torch, ~1 GB). The first run downloads the models to `~/.cache/huggingface`. Full index: ~70 s to parse, ~30 min to embed.
 - Embedding runs were killed twice by Claude Code for low memory. Re-running `python -m analyst.retrieval.index` picks up where it stopped. The embedder now loads columns, not ORM objects, so memory stays flat.
 - `analyst_exp` is a scratch DB in the same container (450-token chunks with headers, embedded; the ADR 0004 comparison). Keep it for Part 5 or drop it: `docker exec footnote-db-1 dropdb -U analyst analyst_exp`.
-- **Prices:** `data/prices.csv` is empty (header only). Add rows `TICKER,YYYY-MM-DD,close` for the 25 tickers to make P/E, market cap and EV multiples work. Every answer that uses a price cites the row.
+- **Prices:** `data/prices.csv` has closes to 2026-11-23 (Yahoo Finance). Refresh before a demo with `uv run python scripts/fetch_prices.py`; a stale file just means older prices, and each answer cites the price date.
 - The live check costs about $0.14-0.17 per run of the 7 questions (`uv run pytest -m live tests/test_agent_live.py -s`).
 - After merging: tag `v0.3.0` on main.

@@ -46,6 +46,10 @@ from analyst.retrieval.search import search
 
 SessionFactory = Callable[[], AbstractContextManager[Session]]
 EXCERPT_CHARS = 1500
+# Balance-sheet inputs older than the latest balance sheet: noted after 100 days (many filers
+# tag share counts only in the 10-K), refused after 400 (Citigroup's last tag is FY2010).
+NOTE_BALANCE_AGE_DAYS = 100
+MAX_BALANCE_AGE_DAYS = 400
 MATCH_CUTOFF = 0.75
 
 
@@ -557,6 +561,7 @@ class _Data:
     s: Session
     co: Company
     _fy: dict[str, dict[int, SeriesPoint]] = field(default_factory=dict)
+    stale: dict[str, str] = field(default_factory=dict)  # item -> age note (refused or used)
 
     def fy(self, item: str) -> dict[int, SeriesPoint]:
         if item not in self._fy:
@@ -567,11 +572,35 @@ class _Data:
         p = self.fy(item).get(year)
         return _fact_operand(self.co.ticker, p) if p else None
 
+    def balance_sheet_date(self) -> dt.date | None:
+        """The company's latest balance-sheet date (from total assets, which all report)."""
+        pts = get_series(self.s, self.co.cik, "total_assets", "Q")
+        return pts[-1].period_end if pts else None
+
     def latest_instant(self, item: str) -> Operand | None:
+        """The latest reported balance of `item`, or None if it is much older than the
+        latest balance sheet (Citigroup's last share count tag is from FY2010, before a
+        1-for-10 reverse split; using it would be a confident wrong answer). An older but
+        usable balance gets an age note."""
         pts = get_series(self.s, self.co.cik, item, "Q") or get_series(
             self.s, self.co.cik, item, "FY"
         )
-        return _fact_operand(self.co.ticker, pts[-1]) if pts else None
+        if not pts:
+            return None
+        latest = self.balance_sheet_date()
+        age = (latest - pts[-1].period_end).days if latest is not None else 0
+        if age > MAX_BALANCE_AGE_DAYS:
+            self.stale[item] = (
+                f"latest {item} is from {pts[-1].period_end}, more than {MAX_BALANCE_AGE_DAYS} "
+                f"days before the latest balance sheet ({latest}); not used"
+            )
+            return None
+        if age > NOTE_BALANCE_AGE_DAYS:
+            self.stale[item] = (
+                f"{item} is as of {pts[-1].period_end}, {age} days before the latest balance "
+                f"sheet ({latest}); a later split or buyback would not be reflected"
+            )
+        return _fact_operand(self.co.ticker, pts[-1])
 
     def ltm_op(self, item: str) -> Computed:
         qs = [_fact_operand(self.co.ticker, p) for p in quarterly_series(self.s, self.co.cik, item)]
@@ -671,6 +700,12 @@ def _compute_one(s: Session, co: Company, args: ComputeInput, prices: PriceProvi
         )
     debt, cash = d.latest_instant("total_debt"), d.latest_instant("cash")
     shares = d.latest_instant("shares_outstanding")
+    items = {
+        "market_cap": ("shares_outstanding",),
+        "net_debt_to_ebitda": ("total_debt", "cash"),
+        "pe": (),
+    }.get(m, ("total_debt", "cash", "shares_outstanding"))
+    notes += [d.stale[i] for i in items if i in d.stale]
     relevant = {"market_cap": (shares,), "net_debt_to_ebitda": (debt, cash), "pe": ()}
     used = [o for o in relevant.get(m, (debt, cash, shares)) if o is not None]
     if len({o.period_end for o in used}) > 1:

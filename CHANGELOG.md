@@ -13,7 +13,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   EV/EBITDA, P/E (None for non-positive EPS), net debt/EBITDA, peer median/mean/quartiles
   (QUARTILE.INC). Exact `Decimal` math, 100% test coverage.
 - `analyst/metrics/prices.py`: `PriceProvider` protocol and `CsvPriceProvider` over
-  `data/prices.csv` (ships header-only; see README).
+  `data/prices.csv`. `scripts/fetch_prices.py` (`analyst/metrics/yahoo.py`) refreshes it with
+  completed daily closes from Yahoo Finance (525 rows, 25 tickers, to 2026-11-23).
+- Market metrics refuse a balance-sheet input more than 400 days older than the latest balance
+  sheet (Citigroup's FY2010 share count), and note one older than 100 days.
 - `analyst/llm/`: `LLMClient` protocol, `AnthropicLLM` (model from `ANTHROPIC_MODEL`, effort
   from `AGENT_EFFORT`, cached system prompt, server-side refusal fallback), per-run token and
   dollar accounting, and `ScriptedLLM`, a fake that replays tool calls for tests.
@@ -27,7 +30,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a non-refused answer must cite something) with one repair turn (ADR 0005).
 - `python -m analyst.agent.ask "..."` CLI; `docs/sample_questions.md`; live test
   `tests/test_agent_live.py` (`-m live`).
-- `scripts/mutation_check_part3.py`: 46 guarantees, each broken on purpose and caught.
+- `scripts/mutation_check_part3.py`: 48 guarantees, each broken on purpose and caught.
 
 ### Changed
 - Tests marked `live` skip the no-network and no-default-DB guards (they use the real API

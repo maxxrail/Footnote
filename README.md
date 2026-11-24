@@ -160,15 +160,20 @@ flowchart LR
 - **Trace and cost.** Every model call and tool call is timed; tokens and dollars are summed
   per run (Sonnet 5.5 prices in `analyst/llm/client.py`).
 - **Prices are the weak spot.** SEC filings have no market prices, so multiples read
-  `data/prices.csv` (`ticker,date,close`), which you maintain by hand. The file ships empty, so
-  market-based metrics answer "no price on file" until you add rows. Every result that uses a
-  price cites the row it used.
+  `data/prices.csv` (`ticker,date,close`). `uv run python scripts/fetch_prices.py` refreshes
+  it with completed daily closes from Yahoo Finance's public chart API (the file in the repo has
+  closes up to 2026-11-23). Every result that uses a price cites the row it used. Market cap
+  multiplies today's price by the latest reported share count. A count older than 400 days
+  before the latest balance sheet is refused: Citigroup, PNC and Workday last tagged one 12-16
+  years ago. Between 100 and 400 days it's used, with an age note. A stock split after that
+  date would not be caught.
 
 ```powershell
 uv run python -m analyst.agent.ask "How did NVIDIA's operating margin trend over the last three fiscal years?"
 uv run python -m analyst.agent.ask "..." --json         # full Answer: citations, trace, usage
 uv run pytest -m live tests/test_agent_live.py -s       # the 5 sample questions + refusals (costs ~$)
-uv run python scripts/mutation_check_part3.py           # 46 guarantees, each broken once
+uv run python scripts/fetch_prices.py                   # refresh data/prices.csv (25 requests)
+uv run python scripts/mutation_check_part3.py           # 48 guarantees, each broken once
 ```
 
 ## Quick start (fills in as parts land)

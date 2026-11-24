@@ -355,6 +355,20 @@ MUTS = [
         "used = [o for o in (debt, cash, shares) if o is not None]",
         [T_A + "test_market_cap_has_no_note_about_debt_or_cash_dates"],
     ),
+    (
+        "stale balance-sheet inputs are refused (any age)",
+        TOOLS,
+        "if age > MAX_BALANCE_AGE_DAYS:",
+        "if False:",
+        [T_A + "test_stale_share_count_is_refused_not_used"],
+    ),
+    (
+        "an old but usable balance carries an age note (silent)",
+        TOOLS,
+        "if age > NOTE_BALANCE_AGE_DAYS:",
+        "if False:",
+        [T_A + "test_old_but_usable_share_count_is_used_with_an_age_note"],
+    ),
     # -- cost ------------------------------------------------------------------------------
     (
         "cost is per million tokens (per thousand)",
