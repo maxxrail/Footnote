@@ -687,3 +687,32 @@ def test_stale_ltm_loses_to_a_newer_fiscal_year(
         )  # fmt: skip
     r = compute(box, "ev_to_revenue")
     assert r["label"] == "CHIP EV / revenue (FY2026)"
+
+
+def test_market_cap_has_no_note_about_debt_or_cash_dates(
+    box: ToolBox, session_factory: SessionFactory
+) -> None:
+    import datetime as dt
+
+    from analyst.db.models import Fact, Filing
+
+    with session_factory() as s:
+        s.add(
+            Filing(
+                accession="0000000001-26-000098",
+                cik=1,
+                form="10-Q",
+                filed_at=dt.date(2026, 5, 1),
+                url="u",
+            )
+        )
+        s.flush()
+        s.add(
+            Fact(
+                id=5001, cik=1, concept="us-gaap:CashAndCashEquivalentsAtCarryingValue", unit="USD",
+                value=500 * M, period_start=None, period_end=dt.date(2026, 3, 31), form="10-Q",
+                accession="0000000001-26-000098",
+            )
+        )  # fmt: skip
+    assert "different dates" not in compute(box, "market_cap")["note"]
+    assert "different dates" in compute(box, "net_debt_to_ebitda")["note"]

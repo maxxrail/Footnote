@@ -671,7 +671,8 @@ def _compute_one(s: Session, co: Company, args: ComputeInput, prices: PriceProvi
         )
     debt, cash = d.latest_instant("total_debt"), d.latest_instant("cash")
     shares = d.latest_instant("shares_outstanding")
-    used = [o for o in (debt, cash, shares) if o is not None]
+    relevant = {"market_cap": (shares,), "net_debt_to_ebitda": (debt, cash), "pe": ()}
+    used = [o for o in relevant.get(m, (debt, cash, shares)) if o is not None]
     if len({o.period_end for o in used}) > 1:
         notes.append(
             "balance-sheet inputs are from different dates: "

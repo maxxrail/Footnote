@@ -174,7 +174,7 @@ MUTS = [
     (
         "question numbers only as a comparison (always fine)",
         POST,
-        "if echoes and not verified_here:",
+        "if not _comparison_holds(e, verified, _strip_labels(sentence)):",
         "if False:",
         [T_P + "test_question_numbers_only_as_a_comparison"],
     ),
@@ -191,6 +191,41 @@ MUTS = [
         "result.no_citations = not refused and not (markers & known)",
         "result.no_citations = False",
         [T_P + "test_answer_must_cite_something_unless_refused"],
+    ),
+    (
+        "a loss written as a plain level fails (unsigned negatives pass)",
+        POST,
+        "if not n.sign and v.signed and v.value < 0 and not n.neg_context:",
+        "if False:",
+        [T_P + "test_a_negative_value_written_as_positive_fails"],
+    ),
+    (
+        "dollars and shares do not mix (any amount matches)",
+        POST,
+        'if (n.money and v.unit == "shares") or (n.shares and v.unit in ("USD", "USD/shares")):',
+        "if False:",
+        [T_P + "test_dollars_and_shares_do_not_mix"],
+    ),
+    (
+        "an echoed question number needs a true comparison (any comparison word)",
+        POST,
+        "return any(v < echo.value for v in same)",
+        "return True",
+        [T_P + "test_question_echo_needs_a_true_comparison"],
+    ),
+    (
+        "list numbering is not a number (checked)",
+        POST,
+        'body = re.sub(r"(?m)^[ \\t]*\\d+[.)][ \\t]", lambda m: " " * len(m.group(0)), text)',
+        "body = text",
+        [T_P + "test_numbered_lists_check_only_the_amounts"],
+    ),
+    (
+        "filing numbers keep a stated direction (unsigned)",
+        POST,
+        "yield Val(-n.value if n.sign < 0 else n.value, n.kind, n.sign != 0, _unit_of(n))",
+        "yield Val(n.value, n.kind, False, _unit_of(n))",
+        [T_P + "test_excerpt_direction_is_kept"],
     ),
     # -- loop ------------------------------------------------------------------------------
     (
@@ -312,6 +347,13 @@ MUTS = [
         "    if len({o.period_end for o in used}) > 1:\n",
         "    if False:\n",
         [T_A + "test_balance_sheet_dates_that_differ_are_noted"],
+    ),
+    (
+        "balance-date notes only for inputs the metric uses (all three)",
+        TOOLS,
+        "used = [o for o in relevant.get(m, (debt, cash, shares)) if o is not None]",
+        "used = [o for o in (debt, cash, shares) if o is not None]",
+        [T_A + "test_market_cap_has_no_note_about_debt_or_cash_dates"],
     ),
     # -- cost ------------------------------------------------------------------------------
     (

@@ -53,7 +53,7 @@ _LABELS = [
     re.compile(r"\b(?:10-K|10-Q|8-K|20-F|DEF 14A)(?:/A)?\b", re.I),
     re.compile(r"\b(?:Item|Note|Tier|Level|Section|Rule|Phase|Stage)\s+\d+[A-C]?\b", re.I),
     re.compile(r"\bPart\s+[IV]+\b", re.I),
-    re.compile(r"^\s*\d+[.)]\s", re.M),  # numbered list items
+    re.compile(r"^[ \t]*\d+[.)][ \t]", re.M),  # numbered list items
     re.compile(r"\b(?:fiscal|calendar)\s+(?:year\s+)?(?:19|20)\d{2}\b", re.I),
     # bare years, unless a unit follows ("2025 million" is an amount)
     re.compile(
@@ -82,6 +82,7 @@ NUMBER = re.compile(
     r"|(?P<x>x|×)(?![a-zA-Z])|\s(?P<times>times)\b"
     r"|\s?(?P<scale>trillion|billion|million|thousand|bn|mm|mn)\b"
     r"|(?P<abbr>[TBMK])(?![a-zA-Z]))?"
+    r"(?P<word>\s+(?:dollars|shares)\b)?"
     r"(?P<close>\))?",
     re.I,
 )
@@ -104,6 +105,19 @@ _DOWN = re.compile(
     r"(?:about\s+|roughly\s+|approximately\s+|nearly\s+)?$",
     re.I,
 )
+# A negative value written without a minus needs one of these in its clause.
+_NEG_WORDS = re.compile(
+    r"\b(?:loss|losses|lost|negative|declin\w*|decreas\w*|fell|fall\w*|drop\w*|down|"
+    r"lower|shr[ai]nk\w*|contract\w*|deficit|outflows?|used in)\b",
+    re.I,
+)
+# Comparison words that let a number from the question be echoed ("below $3 billion").
+_LESS = re.compile(
+    r"\b(?:below|under|less than|lower than|short of|"
+    r"(?:not|n't|never)\s+(?:above|over|exceed\w*|more than|top\w*|reach\w*))\b",
+    re.I,
+)
+_MORE = re.compile(r"\b(?:above|over|exceed\w*|more than|higher than|greater than|topped)\b", re.I)
 # Sentences, table rows and list items. Splits after . ! ? ; even before a digit or a
 # lowercase word (stricter for citations: a marker only covers its own clause).
 _SENTENCE = re.compile(r"(?<=[.!?;])\s+|\n+")
@@ -118,13 +132,17 @@ class Num:
     bare: bool  # no $, no scale, no % or x: may match a multiple too
     sign: int  # -1 / +1 when the text says so (minus, parentheses, fell/grew), else 0
     label: bool  # a small count ("3 years"), not checked
+    money: bool = False  # "$" or "dollars"
+    shares: bool = False  # "... shares"
+    neg_context: bool = False  # its text has a loss/decline/negative word
 
 
 @dataclass(frozen=True)
 class Val:
     value: Decimal  # signed when `signed`; percent for kind "pct"
     kind: Kind
-    signed: bool  # tool values have a sign; numbers read from filing text don't
+    signed: bool  # tool values, and filing numbers with a stated direction, have a sign
+    unit: str = ""  # "USD", "USD/shares", "shares", or "" when unknown
 
 
 def _strip_labels(text: str) -> str:
@@ -137,6 +155,7 @@ def extract(text: str) -> list[Num]:
     """Numbers in `text`, with labels (years, forms, markers...) blanked out first."""
     out = []
     stripped = _strip_labels(text)
+    neg_context = bool(_NEG_WORDS.search(stripped))
     for m in NUMBER.finditer(stripped):
         intpart = m.group("int").replace(",", "")
         dec = m.group("dec") or ""
@@ -163,19 +182,32 @@ def extract(text: str) -> list[Num]:
         label = (
             bare and not dec and base <= SMALL_INT and bool(_COUNT_WORD.match(stripped, m.end()))
         )
+        word = (m.group("word") or "").strip().lower()
+        money = bool(m.group("cur")) or word == "dollars"
+        if word:
+            bare = False
         raw = m.group(0).strip()
-        out.append(Num(raw, base * scale, unit * scale / 2, kind, bare, sign, label))
+        out.append(
+            Num(
+                raw, base * scale, unit * scale / 2, kind, bare, sign, label,
+                money, word == "shares", neg_context,
+            )
+        )  # fmt: skip
     return out
 
 
 # -- tool values ---------------------------------------------------------------------------
 
 
-def _vals_from_display(display: Any) -> Iterator[Val]:
+def _unit_of(n: Num) -> str:
+    return "USD" if n.money else "shares" if n.shares else ""
+
+
+def _vals_from_display(display: Any, unit: str) -> Iterator[Val]:
     if isinstance(display, str):
         for n in extract(display):
             signed_value = -n.value if n.sign < 0 else n.value
-            yield Val(signed_value, n.kind, True)
+            yield Val(signed_value, n.kind, True, unit or _unit_of(n))
 
 
 def _vals_from_item(item: Any) -> Iterator[Val]:
@@ -186,8 +218,11 @@ def _vals_from_item(item: Any) -> Iterator[Val]:
         return
     if not isinstance(item, dict):
         return
-    unit = item.get("unit")
     display = item.get("display")
+    unit = item.get("unit")
+    if unit is None and isinstance(display, str):  # inputs carry no unit: read the display
+        unit = "USD" if "$" in display else "shares" if "shares" in display else ""
+    amount_unit = unit if unit in ("USD", "USD/shares", "shares") else ""
     raw = item.get("value")
     if isinstance(raw, str):
         try:
@@ -200,12 +235,12 @@ def _vals_from_item(item: Any) -> Iterator[Val]:
             elif unit == "x" or (isinstance(display, str) and display.endswith("x")):
                 yield Val(v, "mult", True)
             else:
-                yield Val(v, "amount", True)
-    yield from _vals_from_display(display)
+                yield Val(v, "amount", True, amount_unit)
+    yield from _vals_from_display(display, amount_unit)
     excerpt = item.get("excerpt")
     if isinstance(excerpt, str):
-        for n in extract(excerpt):
-            yield Val(n.value, n.kind, False)
+        for n in extract(excerpt):  # signed only where the filing states a direction
+            yield Val(-n.value if n.sign < 0 else n.value, n.kind, n.sign != 0, _unit_of(n))
     for key in ("inputs", "values"):
         if key in item:
             yield from _vals_from_item(item[key])
@@ -240,8 +275,12 @@ def matches(n: Num, values: Iterable[Val]) -> bool:
             continue
         if abs(n.value - abs(v.value)) > n.tol:
             continue
+        if (n.money and v.unit == "shares") or (n.shares and v.unit in ("USD", "USD/shares")):
+            continue
         if n.sign and v.signed and v.value != 0 and (v.value > 0) != (n.sign > 0):
             continue
+        if not n.sign and v.signed and v.value < 0 and not n.neg_context:
+            continue  # a loss written as a plain level ("net income was $18.76B")
         return True
     return False
 
@@ -317,23 +356,39 @@ def check(
     markers = {int(r) for r in MARKER.findall(text)}
     result.unknown_refs = sorted(markers - known)
     result.no_citations = not refused and not (markers & known)
-    for sentence in _SENTENCE.split(text):
+    # Blank list numbering first, so "1." isn't split off and checked as a number.
+    body = re.sub(r"(?m)^[ \t]*\d+[.)][ \t]", lambda m: " " * len(m.group(0)), text)
+    for sentence in _SENTENCE.split(body):
         nums = [n for n in extract(sentence) if not n.label]
         if not nums:
             continue
         cited_refs = {int(r) for r in MARKER.findall(sentence)} & known
         cited_vals = [v for r in cited_refs for v in by_ref.get(r, [])]
         echoes: list[Num] = []
-        verified_here = False
+        verified: list[Num] = []
         for n in nums:
             if cited_refs and matches(n, cited_vals):
-                verified_here = True
+                verified.append(n)
             elif matches(n, every):
                 (result.miscited_numbers if cited_refs else result.uncited_numbers).append(n.raw)
             elif matches(n, asked):
                 echoes.append(n)
             else:
                 result.unverified_numbers.append(n.raw)
-        if echoes and not verified_here:
-            result.unverified_numbers += [n.raw for n in echoes]
+        for e in echoes:
+            if not _comparison_holds(e, verified, _strip_labels(sentence)):
+                result.unverified_numbers.append(e.raw)
     return result
+
+
+def _comparison_holds(echo: Num, verified: list[Num], sentence: str) -> bool:
+    """A number from the question may be echoed only in a comparison with a verified number
+    in the same sentence, and the comparison must be true ("$1.50B, below $3 billion")."""
+    same = [v.value for v in verified if v.kind == echo.kind]
+    if not same:
+        return False
+    if _LESS.search(sentence):
+        return any(v < echo.value for v in same)
+    if _MORE.search(sentence):
+        return any(v > echo.value for v in same)
+    return False

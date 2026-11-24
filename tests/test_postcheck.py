@@ -248,3 +248,77 @@ def test_table_rows_are_checked_one_by_one() -> None:
     text = "| FY | Revenue |\n|---|---|\n| FY2025 | $1.50B [^1] |\n| FY2024 | $1.10B [^2] |"
     r = check(text, OUT, "q", REFS)
     assert r.unverified_numbers == ["$1.10B"]
+
+
+# -- second review: sign of unsigned losses, units, echoes, lists, excerpt direction -------
+
+LOSS = json.dumps(
+    {"results": [{"ref": 6, "value": "-18756000000", "display": "-$18.76B", "unit": "USD"}]}
+)
+SHARES = json.dumps(
+    {"results": [{"ref": 7, "value": "4370000000", "display": "4,370.0M shares", "unit": "shares"}]}
+)
+GAMING = json.dumps(
+    {"results": [{"ref": 8, "excerpt": "Gaming revenue was up 41% from a year ago."}]}
+)
+MORE = [*OUT, LOSS, SHARES, GAMING]
+MORE_REFS = [*REFS, 6, 7, 8]
+
+
+def ok2(text: str, question: str = "q") -> bool:
+    return check(text, MORE, question, MORE_REFS).ok
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Intel earned $18.76B in FY2024 [^6].",
+        "Intel's net income was $18.76B in FY2024 [^6].",
+        "Revenue grew at a CAGR of 5.7% [^4].",
+        "Revenue CAGR was a positive 5.7% [^4].",
+        "Revenue posted a 5.7% annual increase [^4].",
+    ],
+)
+def test_a_negative_value_written_as_positive_fails(text: str) -> None:
+    assert not ok2(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Intel had a net loss of $18.76B in FY2024 [^6].",
+        "Net income was -$18.76B [^6].",
+        "Revenue declined at a 5.7% annual rate [^4].",
+        "Intel swung from a profit to a loss of $18.76B [^6].",
+    ],
+)
+def test_a_negative_value_with_a_loss_word_passes(text: str) -> None:
+    assert ok2(text), check(text, MORE, "q", MORE_REFS).problems()
+
+
+def test_dollars_and_shares_do_not_mix() -> None:
+    assert not ok2("Intel's market cap is $4.37 billion [^7].")
+    assert not ok2("Intel's EV is 4,370 million dollars [^7].")
+    assert ok2("Intel has 4,370.0M shares outstanding [^7].")
+    assert not ok2("Revenue was 1,500 million shares [^1].")
+
+
+def test_question_echo_needs_a_true_comparison() -> None:
+    q = "Did revenue exceed $3 billion?"
+    assert not ok2("Revenue was $1.50B [^1], and it exceeded $3 billion in FY2025.", q)
+    assert ok2("Revenue was $1.50B [^1], below $3 billion.", q)
+    assert ok2("Revenue of $1.50B [^1] did not exceed $3 billion.", q)
+    assert not ok2("Revenue of $1.50B [^1] was above $3 billion.", q)
+    assert not ok2("Revenue was $1.50B [^1] and $3 billion.", q)  # no comparison word
+    q2 = "Was revenue below $1.3 billion?"
+    assert not ok2("Yes, revenue was $1.50B [^1], below $1.3 billion.", q2)  # false "below"
+
+
+def test_numbered_lists_check_only_the_amounts() -> None:
+    r = check("1. Revenue was $1.50B [^1].\n2. Net loss was -$18.76B [^6].", MORE, "q", MORE_REFS)
+    assert r.ok, r.problems()
+
+
+def test_excerpt_direction_is_kept() -> None:
+    assert ok2("Gaming revenue rose 41% [^8].")
+    assert not ok2("Gaming revenue fell 41% [^8].")
