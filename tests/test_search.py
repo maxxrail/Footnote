@@ -249,6 +249,29 @@ def test_text_leg_weights_rare_terms(indexed: SessionFactory) -> None:
     assert "Tariffs" in hits[0].snippet
 
 
+def test_text_leg_idf_beats_term_frequency(indexed: SessionFactory) -> None:
+    # Short chunks of a common word vs a long sentence with a rare word once. Plain
+    # ts_rank scores them 0.061 vs 0.022 (length-normalised), so without IDF the common
+    # word wins; with IDF ("company" is in every chunk) the rare word does.
+    acc = "0000000001-25-000001"
+    rare = "zeppelins and other airships were mentioned in this long sentence about things"
+    with indexed() as s:
+        rows = ["company"] * 8 + [rare]
+        for i, t in enumerate(rows):
+            s.add(
+                Chunk(
+                    accession=acc,
+                    cik=1,
+                    section="Item 9",
+                    char_start=10**6 + i,
+                    char_end=10**6 + i + 1,
+                    text=t,
+                )
+            )
+    hits = _search(indexed, "company zeppelins", mode="text", k=1)
+    assert "zeppelins" in hits[0].snippet
+
+
 def test_text_leg_matches_any_term(indexed: SessionFactory) -> None:
     # no chunk has both words: an AND query would return nothing
     hits = _search(indexed, "export tariffs", mode="text", k=10)

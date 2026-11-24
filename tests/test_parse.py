@@ -121,6 +121,38 @@ def test_toc_lines_with_page_numbers_are_skipped() -> None:
     assert secs["Item 1A"].length > 2500
 
 
+def test_cross_reference_index_at_the_end_is_ignored() -> None:
+    # INTC: a Form 10-K cross-reference index *after* the body, rows ending in pages
+    text = _doc(
+        "Item 1A. Risk Factors",
+        BODY,
+        "Item 7. Management's Discussion and Analysis",
+        BODY,
+        "Item 1A. | Risk Factors | Pages 37-51",
+        "Item 7. | Management's Discussion and Analysis | Pages 20-36",
+        "Item 8. | Financial Statements and Supplementary Data | Pages 56-108",
+    )
+    for s in detect_sections(text, "10-K"):
+        first_line = text[s.char_start :].split("\n", 1)[0]
+        assert "Pages" not in first_line, s
+
+
+def test_equal_weight_ties_go_to_the_later_heading() -> None:
+    # every section is short, so TOC and body chains weigh the same: body must win
+    text = _doc(
+        "Item 1A.",
+        "Item 7.",
+        "Cover text.",
+        "Item 1A. Risk Factors",
+        "None of note.",
+        "Item 7. Management's Discussion and Analysis",
+        "Short.",
+    )
+    secs = {s.code: s for s in detect_sections(text, "10-K")}
+    assert text[secs["Item 1A"].char_start :].startswith("Item 1A. Risk Factors")
+    assert text[secs["Item 7"].char_start :].startswith("Item 7. Management")
+
+
 def test_missing_body_heading_does_not_pull_items_into_toc() -> None:
     # ADSK: the TOC has an Item 16 the body never repeats. Choosing it must not force
     # every other item back into the TOC.

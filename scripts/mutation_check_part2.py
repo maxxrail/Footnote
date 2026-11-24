@@ -29,7 +29,7 @@ MUTS = [
         "if item is None:",
         [
             T_P + "test_toc_lines_with_page_numbers_are_skipped",
-            T_P + "test_10k_finds_risk_factors_and_mdna_not_toc",
+            T_P + "test_cross_reference_index_at_the_end_is_ignored",
         ],
     ),
     (
@@ -48,6 +48,7 @@ MUTS = [
         "+ pos * 1e-12)",
         "- pos * 1e-12)",
         [
+            T_P + "test_equal_weight_ties_go_to_the_later_heading",
             T_P + "test_10k_finds_risk_factors_and_mdna_not_toc",
             T_P + "test_toc_lines_with_page_numbers_are_skipped",
         ],
@@ -188,7 +189,7 @@ MUTS = [
         SEARCH,
         "idf = math.log(1 + (total - df + 0.5) / (df + 0.5))",
         "idf = 1.0",
-        [T_S + "test_text_leg_weights_rare_terms"],
+        [T_S + "test_text_leg_idf_beats_term_frequency", T_S + "test_text_leg_weights_rare_terms"],
     ),
     (
         "rerank off by default (always on)",
