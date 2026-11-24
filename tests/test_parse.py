@@ -92,7 +92,8 @@ def test_tables_become_pipe_rows() -> None:
 
 def test_hidden_and_ix_header_dropped_inline_ix_unwrapped() -> None:
     html = (
-        '<html><body><div style="display: none"><ix:header>SECRET</ix:header></div>'
+        "<html><body><ix:header>XBRL HEADER</ix:header>"
+        '<div style="display: none">HIDDEN BLOCK</div>'
         '<p>Revenue was <ix:nonFraction name="us-gaap:Revenues">12</ix:nonFraction> million.</p>'
         "</body></html>"
     )

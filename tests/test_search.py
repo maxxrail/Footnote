@@ -249,6 +249,12 @@ def test_text_leg_weights_rare_terms(indexed: SessionFactory) -> None:
     assert "Tariffs" in hits[0].snippet
 
 
+def test_text_leg_matches_any_term(indexed: SessionFactory) -> None:
+    # no chunk has both words: an AND query would return nothing
+    hits = _search(indexed, "export tariffs", mode="text", k=10)
+    assert {h.ticker for h in hits} == {"CHIP", "BANK"}
+
+
 def test_text_leg_with_only_stopwords_returns_nothing(indexed: SessionFactory) -> None:
     assert _search(indexed, "the of and", mode="text") == []
 

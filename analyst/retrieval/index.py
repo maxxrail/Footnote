@@ -29,7 +29,7 @@ from analyst.config import get_settings
 from analyst.db.models import Chunk, Company, Filing, FilingSection, FilingText
 from analyst.db.session import session_scope
 from analyst.edgar.ingest import document_path
-from analyst.retrieval.chunk import chunk_filing
+from analyst.retrieval.chunk import MAX_TOKENS, OVERLAP_TOKENS, chunk_filing
 from analyst.retrieval.embed import Embedder, default_embedder, embed_pending
 from analyst.retrieval.parse import PARSER_VERSION, parse_filing
 
@@ -46,7 +46,13 @@ class IndexReport:
     chunks_embedded: int = 0
 
 
-def index_filing(session: Session, filing: Filing, html: bytes) -> int | None:
+def index_filing(
+    session: Session,
+    filing: Filing,
+    html: bytes,
+    max_tokens: int = MAX_TOKENS,
+    overlap_tokens: int = OVERLAP_TOKENS,
+) -> int | None:
     """(Re)build one filing's text, sections and chunks. Returns chunks written, or None
     if the stored text is already current."""
     sha = hashlib.sha256(html).hexdigest()
@@ -85,7 +91,7 @@ def index_filing(session: Session, filing: Filing, html: bytes) -> int | None:
                 for i, s in enumerate(parsed.sections)
             ],
         )
-    chunks = chunk_filing(parsed)
+    chunks = chunk_filing(parsed, max_tokens, overlap_tokens)
     if chunks:
         session.execute(
             insert(Chunk),
@@ -123,6 +129,8 @@ def run(
     embedder: Embedder | None = None,
     embed: bool = True,
     batch_size: int = 64,
+    max_tokens: int = MAX_TOKENS,
+    overlap_tokens: int = OVERLAP_TOKENS,
 ) -> IndexReport:
     report = IndexReport()
     with session_factory() as s:
@@ -135,7 +143,7 @@ def run(
             continue
         report.filings_seen += 1
         with session_factory() as s:  # one transaction per filing
-            n = index_filing(s, f, path.read_bytes())
+            n = index_filing(s, f, path.read_bytes(), max_tokens, overlap_tokens)
         if n is not None:
             report.filings_parsed += 1
             report.chunks_written += n
@@ -163,6 +171,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--tickers", nargs="+", metavar="TICKER")
     parser.add_argument("--no-embed", action="store_true", help="parse and chunk only")
     parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=MAX_TOKENS,
+        help="chunk size; only applies to filings not yet indexed (use a fresh DB to compare)",
+    )
+    parser.add_argument("--overlap-tokens", type=int, default=OVERLAP_TOKENS)
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     report = run(
@@ -170,6 +185,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         tickers=args.tickers,
         embed=not args.no_embed,
         batch_size=args.batch_size,
+        max_tokens=args.max_tokens,
+        overlap_tokens=args.overlap_tokens,
     )
     print(
         f"filings: {report.filings_seen} on disk, {report.filings_parsed} parsed "

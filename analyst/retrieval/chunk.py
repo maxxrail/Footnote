@@ -23,8 +23,9 @@ _WORD_RE = re.compile(r"\S+")
 
 
 def count_tokens(text: str) -> int:
-    """Word pieces + punctuation: within ~10% of the BGE WordPiece count on filings
-    (it splits "1,234" into 3 and most words into 1), with no tokenizer to load."""
+    """Words + punctuation marks, with no tokenizer to load. On a 2% sample of the corpus
+    the BGE WordPiece count is 1.08x this (p10 1.04, p90 1.13), so 800 here is ~860
+    model tokens."""
     return len(_TOKEN_RE.findall(text))
 
 
