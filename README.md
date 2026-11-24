@@ -145,8 +145,9 @@ flowchart LR
   whose inputs name their facts.
 - **Every number is checked against its citation.** When the model submits its answer, a
   post-check pulls every number out of the text and requires it to match a value of the
-  `[^n]` ref cited in the same sentence: same kind (%, x, amount), same sign when the text
-  states one ("fell 25%" fails against +25%), within the rounding it was written with
+  `[^n]` ref cited in the same sentence: same kind (%, x, dollars vs shares), a sign that
+  agrees ("fell 25%" fails against +25%; a loss written as "net income was $18.76B" fails),
+  within the rounding it was written with
   ("$1.5 billion" matches 1,523,000,000; "$1.6 billion" doesn't). Only typed tool values
   count (never ids, dates or accession numbers). A failure gets one repair turn inside the
   10-step limit; if it still fails, the answer comes back flagged (`unverified_numbers`,
@@ -167,7 +168,7 @@ flowchart LR
 uv run python -m analyst.agent.ask "How did NVIDIA's operating margin trend over the last three fiscal years?"
 uv run python -m analyst.agent.ask "..." --json         # full Answer: citations, trace, usage
 uv run pytest -m live tests/test_agent_live.py -s       # the 5 sample questions + refusals (costs ~$)
-uv run python scripts/mutation_check_part3.py           # 40 guarantees, each broken once
+uv run python scripts/mutation_check_part3.py           # 46 guarantees, each broken once
 ```
 
 ## Quick start (fills in as parts land)
