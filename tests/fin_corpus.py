@@ -92,7 +92,9 @@ def tenk_html(mdna: str) -> str:
 </body></html>"""
 
 
-def seed(session_factory: SessionFactory, raw: Path | None = None) -> dict[str, int]:
+def seed(
+    session_factory: SessionFactory, raw: Path | None = None, q3_html: str | None = None
+) -> dict[str, int]:
     """Insert companies, filings and facts. Returns {label: fact id} for key facts.
     If `raw` is given, the 10-K HTML is also written where the indexer looks for it."""
     ids: dict[str, int] = {}
@@ -177,7 +179,7 @@ def seed(session_factory: SessionFactory, raw: Path | None = None) -> dict[str, 
             zip(quarter_ends, CHIP_Q2025_REVENUE, strict=True), 1
         ):
             acc = f"0000000001-25-00001{n}"
-            filing(1, acc, "10-Q", end + dt.timedelta(days=35))
+            filing(1, acc, "10-Q", end + dt.timedelta(days=35), q3_html if n == 3 else None)
             s.flush()
             fact(1, "Revenues", value, start, end, acc, "10-Q", f"CHIP Revenues FY2025 Q{n}")
 
@@ -201,3 +203,74 @@ def seed(session_factory: SessionFactory, raw: Path | None = None) -> dict[str, 
                 f"BANK {concept} FY2025",
             )
     return ids
+
+
+# FAB (cik 3): a second semis peer with FY2025 facts and a cover-page share count, for comps.
+FAB_FY2025: dict[str, Decimal | int] = {
+    "Revenues": 800 * M,
+    "OperatingIncomeLoss": 160 * M,
+    "DepreciationDepletionAndAmortization": 40 * M,
+    "NetIncomeLoss": 120 * M,
+    "LongTermDebt": 100 * M,
+    "CashAndCashEquivalentsAtCarryingValue": 50 * M,
+    "Assets": 2000 * M,
+}
+
+
+def seed_peer(session_factory: SessionFactory) -> None:
+    with session_factory() as s:
+        s.add(Company(cik=3, ticker="FAB", name="Fab Inc", fiscal_year_end="1231"))
+        s.flush()
+        acc = "0000000003-26-000001"
+        s.add(
+            Filing(
+                accession=acc,
+                cik=3,
+                form="10-K",
+                filed_at=dt.date(2026, 2, 20),
+                url=f"https://www.sec.gov/Archives/edgar/data/3/{acc}/{acc}.htm",
+            )
+        )
+        s.flush()
+        fid = 900
+        for concept, value in FAB_FY2025.items():
+            fid += 1
+            instant = concept in INSTANT or concept == "Assets"
+            s.add(
+                Fact(
+                    id=fid,
+                    cik=3,
+                    concept=f"us-gaap:{concept}",
+                    unit="USD",
+                    value=Decimal(value),
+                    period_start=None if instant else dt.date(2025, 1, 1),
+                    period_end=dt.date(2025, 12, 31),
+                    form="10-K",
+                    accession=acc,
+                )
+            )
+        s.add(
+            Fact(
+                id=fid + 1,
+                cik=3,
+                concept="dei:EntityCommonStockSharesOutstanding",
+                unit="shares",
+                value=Decimal(40 * M),
+                period_start=None,
+                period_end=dt.date(2026, 2, 10),
+                form="10-K",
+                accession=acc,
+            )
+        )
+
+
+def tenq_html(mdna: str, risks: str) -> str:
+    """A 10-Q with MD&A (Part I, Item 2) and risk factors (Part II, Item 1A)."""
+    return f"""<html><body><p>FORM 10-Q</p>
+<p>PART I — FINANCIAL INFORMATION</p>
+<p>Item 1. Financial Statements</p><p>{FILLER}</p>
+<p>Item 2. Management's Discussion and Analysis</p><p>{mdna}</p><p>{FILLER}</p>
+<p>PART II — OTHER INFORMATION</p>
+<p>Item 1A. Risk Factors</p>{risks}
+<p>Item 6. Exhibits</p><p>{FILLER}</p>
+</body></html>"""

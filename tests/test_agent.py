@@ -581,7 +581,7 @@ def test_ebitda_never_mixes_ltm_windows(box: ToolBox, session_factory: SessionFa
 
     from sqlalchemy import delete
 
-    from analyst.agent.tools import _Data, _flow
+    from analyst.agent.tools import CompanyData, flow
     from analyst.db.models import Company, Fact, Filing
 
     def q(year: int, n: int) -> tuple[dt.date, dt.date]:
@@ -615,8 +615,8 @@ def test_ebitda_never_mixes_ltm_windows(box: ToolBox, session_factory: SessionFa
             )
         )
     with session_factory() as s:
-        assert _flow(_Data(s, s.get(Company, 1)), "d_and_a")[1] == "LTM to 2025-03-31"  # type: ignore[arg-type]
-        assert _flow(_Data(s, s.get(Company, 1)), "operating_income")[1] == "LTM to 2025-12-31"  # type: ignore[arg-type]
+        assert flow(CompanyData(s, s.get(Company, 1)), "d_and_a")[1] == "LTM to 2025-03-31"  # type: ignore[arg-type]
+        assert flow(CompanyData(s, s.get(Company, 1)), "operating_income")[1] == "LTM to 2025-12-31"  # type: ignore[arg-type]
     e = compute(box, "ev_to_ebitda")
     # windows differ -> same fiscal year for both legs -> FY2025 D&A is missing -> no value
     assert e["label"] == "CHIP EV / EBITDA (FY2025)"
@@ -793,3 +793,146 @@ def test_old_but_usable_share_count_is_used_with_an_age_note(
     mc = compute(box, "market_cap")  # 273 days old: used, with a note
     assert mc["value"] == "5000000000"
     assert "shares_outstanding is as of 2025-12-31, 273 days before" in mc["note"]
+
+
+def test_newer_cover_page_share_count_is_used(
+    box: ToolBox, session_factory: SessionFactory
+) -> None:
+    """Citigroup-style: the balance-sheet share tag is stale, the 10-Q cover page is current."""
+    import datetime as dt
+
+    from analyst.db.models import Fact, Filing
+
+    with session_factory() as s:
+        s.add(
+            Filing(
+                accession="0000000001-27-000005",
+                cik=1,
+                form="10-Q",
+                filed_at=dt.date(2027, 5, 1),
+                url="u",
+            )
+        )
+        s.flush()
+        for fid, concept, value, end in [
+            (7100, "us-gaap:Assets", 9000 * M, dt.date(2027, 3, 31)),
+            (7101, "dei:EntityCommonStockSharesOutstanding", 120 * M, dt.date(2027, 4, 20)),
+        ]:
+            s.add(
+                Fact(
+                    id=fid, cik=1, concept=concept, unit="shares" if "dei" in concept else "USD",
+                    value=value, period_start=None, period_end=end, form="10-Q",
+                    accession="0000000001-27-000005",
+                )
+            )  # fmt: skip
+    mc = compute(box, "market_cap")
+    assert mc["value"] == "6000000000"  # $50 x 120M cover-page shares
+    assert any("cover page, 2027-04-20" in i["label"] for i in mc["inputs"])
+    assert "shares_outstanding" not in mc["note"]
+
+
+def test_stale_cover_page_count_is_refused_too(
+    box: ToolBox, session_factory: SessionFactory
+) -> None:
+    import datetime as dt
+
+    from analyst.db.models import Fact, Filing
+
+    with session_factory() as s:
+        s.add(
+            Filing(
+                accession="0000000001-27-000006",
+                cik=1,
+                form="10-Q",
+                filed_at=dt.date(2027, 5, 1),
+                url="u",
+            )
+        )
+        s.add(
+            Filing(
+                accession="0000000001-19-000001",
+                cik=1,
+                form="10-K",
+                filed_at=dt.date(2019, 2, 1),
+                url="u",
+            )
+        )
+        s.flush()
+        s.add(
+            Fact(
+                id=7200,
+                cik=1,
+                concept="us-gaap:Assets",
+                unit="USD",
+                value=9000 * M,
+                period_start=None,
+                period_end=dt.date(2027, 3, 31),
+                form="10-Q",
+                accession="0000000001-27-000006",
+            )
+        )
+        s.add(
+            Fact(
+                id=7201,
+                cik=1,
+                concept="dei:EntityCommonStockSharesOutstanding",
+                unit="shares",
+                value=1 * M,
+                period_start=None,
+                period_end=dt.date(2019, 1, 15),
+                form="10-K",
+                accession="0000000001-19-000001",
+            )
+        )
+    mc = compute(box, "market_cap")
+    assert mc["value"] is None  # both counts too old (us-gaap 2025-12-31, cover 2019)
+    assert "latest shares_outstanding is from 2025-12-31" in mc["note"]
+
+
+def test_old_cover_page_count_gets_an_age_note(
+    box: ToolBox, session_factory: SessionFactory
+) -> None:
+    import datetime as dt
+
+    from analyst.db.models import Fact, Filing
+
+    with session_factory() as s:
+        s.add(
+            Filing(
+                accession="0000000001-27-000007",
+                cik=1,
+                form="10-Q",
+                filed_at=dt.date(2027, 5, 1),
+                url="u",
+            )
+        )
+        s.flush()
+        s.add(
+            Fact(
+                id=7300,
+                cik=1,
+                concept="us-gaap:Assets",
+                unit="USD",
+                value=9000 * M,
+                period_start=None,
+                period_end=dt.date(2026, 12, 31),
+                form="10-Q",
+                accession="0000000001-27-000007",
+            )
+        )
+        s.add(
+            Fact(
+                id=7301,
+                cik=1,
+                concept="dei:EntityCommonStockSharesOutstanding",
+                unit="shares",
+                value=110 * M,
+                period_start=None,
+                period_end=dt.date(2026, 2, 1),
+                form="10-Q",
+                accession="0000000001-27-000007",
+            )
+        )
+    mc = compute(box, "market_cap")
+    assert mc["value"] == "5500000000"
+    assert "cover-page share count is as of 2026-02-01, 333 days before" in mc["note"]

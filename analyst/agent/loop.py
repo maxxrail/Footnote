@@ -22,6 +22,7 @@ end of the run (ADR 0005).
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
@@ -30,7 +31,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from analyst.agent import postcheck
 from analyst.agent.citations import AnyCitation
-from analyst.agent.tools import SubmitAnswerInput, ToolBox, ToolError, tool_definitions
+from analyst.agent.tools import Excerpt, SubmitAnswerInput, ToolBox, ToolError, tool_definitions
 from analyst.llm.client import LLMClient, Usage
 
 MAX_STEPS = 10
@@ -107,14 +108,25 @@ def run(
     toolbox: ToolBox,
     max_steps: int = MAX_STEPS,
     system: str = SYSTEM_PROMPT,
+    context: Sequence[Excerpt] = (),
 ) -> Answer:
+    """Answer `question`. `context` is source material given up front (a workflow's
+    filing excerpts or computed values); it gets refs and is cited like tool output."""
     started = time.perf_counter()
     toolbox.refs.clear()  # refs are per run; a reused toolbox must not carry old ones
     tools = tool_definitions()
-    messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
     trace = Trace()
     usage = Usage()
     outputs: list[str] = []  # every tool output, for the post-check
+    prompt = question
+    if context:
+        provided = toolbox.preload(context)
+        outputs.append(provided)
+        prompt = (
+            f"{question}\n\nSource material (already retrieved; cite it by `ref`, and use "
+            f"the tools for anything else):\n{provided}"
+        )
+    messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
     repair_used = False
     final: tuple[SubmitAnswerInput, postcheck.CheckResult] | None = None
 

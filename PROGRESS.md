@@ -1,13 +1,13 @@
 # Progress
 
-**Current part:** 3 (in review, v0.3.0, PR open). Next: 4
+**Current part:** 4 (in review, v0.4.0, PR open). Next: 5
 
 | Part | Name | Status |
 |------|------|--------|
 | 1 | Financial data layer (SEC EDGAR + XBRL) | done (v0.1.0) |
 | 2 | Filing search with citations (hybrid retrieval) | done (v0.2.0); check 3 waived by Maxx: hybrid 14/15 vs vector 15/15 on gold, tied 20/20 on held-out |
-| 3 | The analyst agent (tools, deterministic math, cited answers) | in review (v0.3.0, PR open): 4 of 4 checks pass |
-| 4 | Banker deliverables (comps → Excel, tearsheet, earnings brief) | not started |
+| 3 | The analyst agent (tools, deterministic math, cited answers) | done (v0.3.0) |
+| 4 | Banker deliverables (comps → Excel, tearsheet, earnings brief) | in review (v0.4.0, PR open): checks 1, 2, 4 pass; check 3 recalculated in LibreOffice (no Excel installed), Excel itself not yet |
 | 5 | Evals (golden set, numeric + citation graders, CI gate) | not started |
 | 6 | Ship it (API, web UI, Docker, deploy, observability, demo) | not started |
 
@@ -64,6 +64,15 @@
 - P3: Model `claude-sonnet-5-5` (from `.env`), effort `medium` (`AGENT_EFFORT`), adaptive thinking (model default), cached system prompt + tools, server-side refusal fallback (`fallbacks="default"`).
 - P3: Live tests (`-m live`) skip the no-network and no-default-engine test guards and only read the real DB.
 - P3: After run 1 of the live check (4/5), the system prompt and the repair message were changed to say the `[^n]` marker must be in the same sentence as the number. No test or threshold changed. Run 2: 5/5; run 3 (post-check rebuilt): 5/5; run 4 (second review): 4/5, JPM flagged for a marker in the next sentence; run 5 (repair message quotes the sentences): 5/5.
+- P4: ADR 0006: comps workbook = blue cited inputs + live formulas on Comps, NM by `IF(AND(ISNUMBER..), IF(den>0, ..), "NM")`, stats over peers only. Tests recalculate the workbook with the `formulas` package (LibreOffice isn't installed) and compare every cell to `analyst.metrics`.
+- P4: Market cap uses the newer of the balance-sheet and cover-page (`dei:EntityCommonStockSharesOutstanding`) share counts. Companies without a market cap went from 4 (C, PNC, TXN, WDAY) to 1 (WDAY, last tagged 2018).
+- P4: Comps P/E = market cap / net income (a formula). The agent's `compute pe` is price / FY diluted EPS.
+- P4: Comps uses LTM revenue and net income when four contiguous quarters reach the latest FY; EBITDA's two legs share one window, which is usually the FY (quarterly D&A is rarely tagged). Bases are shown per row. Deriving LTM D&A from YTD is left for later.
+- P4: Workflows hand the agent source material up front (`loop.run(context=...)`): 10-K Item 1 / 1A chunks, 10-Q MD&A chunks, computed deltas. These are registered as refs, so the post-check accepts their numbers only when cited.
+- P4: Tearsheet profile on page 1, sources on page 2 (the "one page" is the profile). A per-share split warning compares the share count implied by NI / EPS across the displayed years: NVIDIA FY2022 EPS $3.85 is pre-split next to FY2023 $0.17.
+- P4: Earnings risk diff: a 10-Q Item 1A paragraph (>= 80 chars) is new if no 10-K Item 1A paragraph has a difflib ratio >= 0.85. "No material changes" statements don't count as new. At most 8 new paragraphs go to the agent, and the brief says how many there were.
+- P4: `.gitattributes` marks pdf/xlsx/png binary. ReportLab PDFs are plain ASCII, so `text=auto` treated them as text and line-ending conversion would break their xref offsets.
+- P4: Incident (fixed): the first set of examples was generated while the Part 3 mutation script ran in the background. It edits source files in place, so the JPM summary showed a mutated EV (peer median EV/Revenue 8.7x instead of 4.3x). All examples were deleted and regenerated with nothing else running.
 
 ## Acceptance results
 <!-- Claude Code: paste the output of each part's acceptance checks here when done. -->
@@ -476,6 +485,130 @@ Second review, after the fixes above:
 Live run 4 also crashed printing a "−" to the Windows console (cp1252). The same would have
 happened in `python -m analyst.agent.ask`. Fixed with `safe_print`, and tested.
 
+### Part 4 (2026-11-24)
+
+**1. `pytest`, `ruff` clean: PASS**
+```
+$ uv run pytest -q --cov=analyst/metrics --cov-report=term
+analyst\metrics\finance.py      100      0   100%
+analyst\metrics\yahoo.py         42      0   100%
+TOTAL                           323      0   100%       (metrics coverage still 100%)
+293 passed, 8 deselected
+All checks passed!                     (ruff)
+97 files already formatted             (ruff format)
+Success: no issues found in 73 source files   (mypy)
+No new upgrade operations detected.    (alembic check)
+```
+New tests:
+- `tests/test_comps.py` (9). The workbook has three sheets of formulas. It is recalculated with
+  `formulas` and every cell equals `analyst.metrics`. Also covered: the NM rule for missing inputs
+  and for negative earnings, peer stats that exclude the target and NM peers, peer override,
+  unknown tickers, and the stored run.
+- `tests/test_workflows_docs.py` (11). Tearsheet and earnings brief with a scripted fake LLM.
+  Their citations resolve, a flagged number is labelled, the split warning and the risk diff work,
+  and "no material changes" makes no model call.
+- `tests/test_agent.py` (+5): cover-page shares.
+
+**2. Live: comps for 3 targets (one per peer group), a tearsheet and an earnings brief, committed to `examples/`: PASS**
+```
+$ uv run python -m analyst.workflows run comps --ticker MSFT --out examples
+MSFT: EV/Revenue 10.6x vs peer median 6.1x; EV/EBITDA 18.2x vs peer median 18.0x; P/E 25.6x vs peer median 18.2x
+$ ... comps --ticker NVDA
+NVDA: EV/Revenue 13.2x vs peer median 13.3x; EV/EBITDA 29.9x vs peer median 40.0x; P/E 20.6x vs peer median 38.3x
+$ ... comps --ticker JPM
+JPM: EV/Revenue NM vs peer median 4.3x; EV/EBITDA NM vs peer median NM; P/E 12.7x vs peer median 10.7x
+$ ... tearsheet --ticker NVDA
+NVDA tearsheet: fits on one page, sources after it     | cost $0.0558
+$ ... earnings --ticker MSFT
+MSFT FY2027 Q1: revenue +18.8% vs FY2026 Q1; risk factors changed     | cost $0.0523
+```
+Recalculating the three workbooks with `formulas` gives no errors:
+
+| Workbook | Formulas | NM cells | Errors | Cited inputs |
+|---|---|---|---|---|
+| comps_MSFT | 87 | 5 | none | 71 |
+| comps_NVDA | 79 | 1 | none | 64 |
+| comps_JPM | 79 | 24 | none | 46 |
+
+JPM is NM-heavy for an honest reason: banks have no operating income, and JPM and USB have no
+recent `LongTermDebt` tag (latest 2014 and 2023), so EV is NM for them. P/E works for every bank.
+
+Neither the tearsheet nor the brief has any `_Number check` flag. Hand checks:
+- NVDA FY2024 operating margin 32,972 / 60,922 = 54.1%.
+- MSFT FY2027 Q1 revenue 92,279 / 77,673 − 1 = 18.8%.
+- MSFT net margin change 36,629 / 92,279 − 27,747 / 77,673 = 39.7% − 35.7% = +4.0 pp.
+
+The tearsheet profile fits on page 1 (rendered with `uv run --with pypdfium2` and inspected:
+`docs/img/tearsheet_NVDA_page1.png`). Its split warning reads "changes 10.1x from FY2022 to FY2023".
+
+Examples were regenerated after the review fixes (with nothing else running). The MSFT brief's
+risk diff now reports 18 new paragraphs; it was 24, and 6 of those were pieces of 10-K paragraphs.
+
+**3. Open one comps sheet in Excel: PARTLY MET (recalculated in LibreOffice, not Excel).**
+Excel desktop isn't installed on Maxx's machine (Excel COM: "Class not registered"). At Maxx's
+request the three workbooks were recalculated headless in LibreOffice Calc 7 (a throwaway
+`debian:bookworm-slim` container with `libreoffice-calc-nogui`), and every sheet was exported to CSV:
+```
+comps_MSFT: LibreOffice errors none | 45 multiple/stat cells compared with the Python recalculation, mismatches none
+comps_NVDA: LibreOffice errors none | 42 compared, mismatches none
+comps_JPM:  LibreOffice errors none | 42 compared, mismatches none
+MSFT peer stats (EV/Rev, EV/EBITDA, P/E): median 6.1x / 18.0x / 18.2x; 25th pct 3.8x / 14.0x / 15.5x;
+  75th pct 6.5x / 29.5x / 35.4x; n 7 / 7 / 7
+JPM EV/EBITDA stats: NM (no bank has operating income), n 0
+```
+LibreOffice is an independent engine: no `#NAME?`, `#REF!` or `#DIV/0!`, and the `QUARTILE` rows
+compute. Real Excel is still unchecked (for example, Excel for the web).
+
+**4. README "Part 4" section with screenshot placeholders: PASS**: README.md → "Part 4: Banker
+deliverables". It has an Excel screenshot placeholder for Maxx and the real tearsheet page image.
+
+**Mutation checks** (`uv run python scripts/mutation_check_part4.py`): **25/25** caught
+(18 at first, 7 added for the review's findings).
+The Part 3 script still catches 48/48 after its two now-ambiguous targets were made unique.
+```
+CAUGHT | EV formula = market cap + debt - cash (adds cash) | 1 failed
+CAUGHT | NM rule: no multiple on a non-positive denominator (P/E of a loss) | 1 failed
+CAUGHT | NM rule: missing inputs give NM, not an error (no ISNUMBER guard) | 1 failed
+CAUGHT | peer stats exclude the target (include it) | 1 failed
+CAUGHT | every input carries its citation comment (none) | 1 failed
+CAUGHT | inputs are blue (black) | 1 failed
+CAUGHT | peer override is used (ignored) | 1 failed
+CAUGHT | check values follow the formulas (EBITDA = OI - D&A) | 1 failed
+CAUGHT | the run's final status is stored (stays 'running') | 1 failed
+CAUGHT | workflow source material is citable (not in the post-check's outputs) | 1 failed
+CAUGHT | a newer cover-page share count is used (always the balance-sheet count) | 1 failed
+CAUGHT | split warning on mixed per-share bases (never) | 1 failed
+CAUGHT | a flagged agent section says so (silent) | 1 failed
+CAUGHT | adjacent footnote markers stay separate in the PDF (run together) | 1 failed
+CAUGHT | compare with the same quarter a year earlier (same year) | 1 failed
+CAUGHT | margin change = current - prior (reversed) | 1 failed
+CAUGHT | near-copies of 10-K paragraphs are not new (everything is new) | 1 failed
+CAUGHT | 'no material changes' means unchanged (counted as a new risk) | 1 failed
+```
+
+**part-reviewer findings (Part 4) and what was done**
+| # | Finding | Action |
+|---|---|---|
+| 1 | `QUARTILE.INC` written without Excel's `_xlfn.` prefix: real Excel would most likely show `#NAME?`, and `IFERROR` would hide it as "NM" | **Fixed.** Legacy `QUARTILE` (identical in Excel). A test checks every workbook function is in openpyxl's plain-Excel list. Mutation added. |
+| 2 | Risk diff counted pieces of 10-K paragraphs (10-Q text cut at page breaks) as new; the MSFT brief had 6 such, one backing a false "what changed" bullet | **Fixed.** A paragraph found anywhere in the 10-K text is not new. Test and mutation. MSFT: 24 → 18 new. |
+| 3 | No revenue fact in the latest 10-Q → fell back to an older quarter (Citigroup: FY2025 Q4 while citing a Q3-2026 10-Q) | **Fixed.** The quarter comes from the 10-Q's own revenue point, else its period of report, else refuse. Tests and mutation. |
+| 4 | Revenue LTM vs EBITDA FY mixing was shown only on Inputs | **Fixed (disclosed).** Each such row gets a "bases differ: …" note in the Comps Notes column. Test and mutation. LTM D&A from YTD is still to do. |
+| 5 | Duplicate peers counted twice | **Fixed.** De-duplicated. Test and mutation. |
+| 6 | Earnings table footnotes lacked concept, period and fact id; margin rows had no facts | **Fixed.** Every row cites each fact (concept, period, value, unit, form, accession, fact id). Test and mutation. |
+| 7 | Tearsheet valuation footnote didn't cite the denominators | **Fixed.** Every input with its basis and facts, plus the formulas. Test. |
+| 8 | A 10-K/A without Item 1/1A could be "the latest 10-K" | **Fixed.** Filings are chosen by the section needed (`latest_filing_with_section`). |
+| 9 | "The 10-Q has no Part II, Item 1A" stated as fact when it may be a parse miss | **Fixed.** Now "no … section was found … (it may be missing or the parser may have missed its heading)". |
+| 10 | Failed runs could stay `running` or lose cost | **Fixed.** The run is stored in `finally` with status and all agent cost so far. Test (stored as `failed`) and mutation. |
+| 11 | Error message mentioned a `--no-agent` flag that doesn't exist | **Fixed.** |
+| 12 | Excel market cap had no >0 guard (Python did) | **Fixed.** `IF(AND(p>0,sh>0),…)`. |
+| 13 | Tearsheet footnotes not in reading order | **Fixed.** Business, financials, risks, valuation. |
+| 14 | Model meta-comment in the business section ("the excerpts do not name…") | **Fixed.** The prompt allows `search_filings` on Item 1 and says to leave out what isn't there. The NVDA business section now names both segments, cited. |
+
+Also found after the review: in the regenerated MSFT brief, the model put `[^n]` markers after the
+full stop ("…25%. [^9]"), and the post-check read them as a new sentence (every number flagged).
+**Fixed.** Markers right after a sentence's full stop belong to it. Test and mutation; the brief was regenerated with no flags.
+
+
 ## Notes for Maxx
 <!-- Anything the user has to do by hand (keys, Docker, accounts). -->
 - `.env` holds your `SEC_USER_AGENT` (you created it). It is gitignored.
@@ -488,4 +621,5 @@ happened in `python -m analyst.agent.ask`. Fixed with `safe_print`, and tested.
 - `analyst_exp` is a scratch DB in the same container (450-token chunks with headers, embedded; the ADR 0004 comparison). Keep it for Part 5 or drop it: `docker exec footnote-db-1 dropdb -U analyst analyst_exp`.
 - **Prices:** `data/prices.csv` has closes to 2026-11-23 (Yahoo Finance). Refresh before a demo with `uv run python scripts/fetch_prices.py`; a stale file just means older prices, and each answer cites the price date.
 - The live check costs about $0.14-0.17 per run of the 7 questions (`uv run pytest -m live tests/test_agent_live.py -s`).
-- After merging: tag `v0.3.0` on main.
+- **Optional: open one comps workbook in real Excel** (Excel for the web works; Excel desktop isn't installed). LibreOffice already recalculated all three with no errors. A screenshot of the Comps sheet would fill the README placeholder.
+- After merging: tag `v0.4.0` on main.

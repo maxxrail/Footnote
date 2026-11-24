@@ -329,3 +329,19 @@ def test_repair_message_quotes_the_sentences_with_problems() -> None:
     r = check(text, OUT, "q", REFS)
     assert r.flagged_sentences == ["The table shows 2.1 vs 2.3 and 31%."]
     assert '"The table shows 2.1 vs 2.3 and 31%."' in r.problems()
+
+
+def test_percentage_points_and_basis_points_match_a_ratio_change() -> None:
+    out = '{"results": [{"ref": 1, "value": "0.012", "display": "1.2%", "unit": "ratio"}]}'
+    for text in ("Margin rose 1.2 pp [^1].", "Margin rose 1.2 percentage points [^1].",
+                 "Margin rose 120 bps [^1].", "Margin rose 120 basis points [^1]."):  # fmt: skip
+        assert check(text, [out], "q", [1]).ok, text
+    assert not check("Margin rose 150 bps [^1].", [out], "q", [1]).ok
+
+
+def test_markers_after_the_full_stop_belong_to_that_sentence() -> None:
+    assert ok("Revenue was $1.5 billion. [^1] Growth was 25%. [^2]")
+    assert ok("- Revenue was $1.5 billion, up 25%. [^1][^2]\n- Margin was 25%. [^2]")
+    # but a marker in the next sentence still doesn't cover an earlier number
+    r = check("Revenue was $1.5 billion. Growth was 25% [^2].", OUT, "q", REFS)
+    assert r.uncited_numbers == ["$1.5 billion"]

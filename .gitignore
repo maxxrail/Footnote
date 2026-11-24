@@ -11,3 +11,4 @@ node_modules/
 web/dist/
 evals/results/
 .claude/settings.local.json
+output/

@@ -56,6 +56,18 @@ def cagr(start: Operand | None, end: Operand | None, years: int, metric: str = "
     return Computed(metric, value, formula, (start, end))
 
 
+def difference(current: Operand | None, prior: Operand | None, metric: str = "change") -> Computed:
+    """current - prior, in the operands' unit (a margin change in a ratio: 0.012 = 1.2 pp)."""
+    formula = "current - prior"
+    known: dict[str, Unit] = {"ratio": "ratio", "USD": "USD", "USD/shares": "USD/shares",
+                              "shares": "shares", "x": "x"}  # fmt: skip
+    present = current or prior
+    out_unit: Unit = known.get(present.unit, "ratio") if present else "ratio"
+    if current is None or prior is None:
+        return missing(metric, formula, current, prior, unit=out_unit)
+    return Computed(metric, current.value - prior.value, formula, (current, prior), out_unit)
+
+
 # -- margins -------------------------------------------------------------------------------
 
 

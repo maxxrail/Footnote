@@ -78,7 +78,7 @@ _SCALES = {
 NUMBER = re.compile(
     r"(?<![\w.])(?P<paren>\()?(?P<neg>[-−–])?(?P<cur>\$)?\s?"
     r"(?P<int>\d{1,3}(?:,\d{3})+|\d+)(?:\.(?P<dec>\d+))?"
-    r"(?:\s?(?P<pct>%|percent\b|pct\b)"
+    r"(?:\s?(?P<pct>%|percent\b|pct\b|pp\b|percentage points?\b|bps\b|basis points?\b)"
     r"|(?P<x>x|×)(?![a-zA-Z])|\s(?P<times>times)\b"
     r"|\s?(?P<scale>trillion|billion|million|thousand|bn|mm|mn)\b"
     r"|(?P<abbr>[TBMK])(?![a-zA-Z]))?"
@@ -120,7 +120,8 @@ _LESS = re.compile(
 _MORE = re.compile(r"\b(?:above|over|exceed\w*|more than|higher than|greater than|topped)\b", re.I)
 # Sentences, table rows and list items. Splits after . ! ? ; even before a digit or a
 # lowercase word (stricter for citations: a marker only covers its own clause).
-_SENTENCE = re.compile(r"(?<=[.!?;])\s+|\n+")
+# Markers placed after the full stop ("... 25%. [^9]") still belong to that sentence.
+_SENTENCE = re.compile(r"(?<=[.!?;])[ \t]+(?!\[\^)|\n+")
 
 
 @dataclass(frozen=True)
@@ -165,6 +166,9 @@ def extract(text: str) -> list[Num]:
             continue
         scale_word = (m.group("scale") or m.group("abbr") or "").lower()
         scale = _SCALES.get(scale_word, Decimal(1))
+        pct_word = (m.group("pct") or "").lower()
+        if pct_word in ("bps", "basis point", "basis points"):
+            scale = Decimal("0.01")  # 120 bps = 1.2 percentage points
         unit = Decimal(10) ** -len(dec)
         kind: Kind = (
             "pct" if m.group("pct") else "mult" if (m.group("x") or m.group("times")) else "amount"
