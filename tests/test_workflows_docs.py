@@ -138,6 +138,7 @@ def test_tearsheet_writes_pdf_markdown_and_chart(ctx: Context) -> None:
     assert "[^1]: CHIP 10-K filed 2026-02-15, Item 1 (Business)" in sources
     assert "us-gaap:Revenues" in sources and "0000000001-26-000001" in sources
     assert [s.kind for s in res.steps].count("agent") == 2
+    assert "_Number check" not in md
     assert res.cost_usd is None  # the fake model has no price
 
 
@@ -204,6 +205,11 @@ def test_split_warning_flags_mixed_per_share_bases() -> None:
     }
     w = split_warning(eps, ni)
     assert "FY2022 to FY2023" in w and "not split-adjusted" in w
+    # only the displayed years count: a jump before the table isn't reported, one inside is
+    eps[2021] = sp(2021, "40", "eps_diluted")
+    ni[2021] = sp(2021, "9000e6", "net_income")
+    assert "FY2021" not in split_warning(eps, ni, [2022, 2023, 2024])
+    assert "FY2022 to FY2023" in split_warning(eps, ni, [2022, 2023, 2024])
     eps_ok = {2023: sp(2023, "0.17", "eps_diluted"), 2024: sp(2024, "1.19", "eps_diluted")}
     assert split_warning(eps_ok, ni) == ""
     assert split_warning({2022: sp(2022, "-1", "eps_diluted")}, ni) == ""
@@ -255,6 +261,7 @@ def test_earnings_brief(ctx: Context) -> None:
     assert "Revenue grew 26.7%" in md and "accelerator demand" in md
     assert "1 paragraph(s) in the 10-Q's Part II, Item 1A have no close match" in md
     assert "wafer tariffs" in md
+    assert "_Number check" not in md  # both agent sections passed the post-check
     assert "revenue +26.7% vs FY2024 Q3; risk factors changed" in res.summary
 
 

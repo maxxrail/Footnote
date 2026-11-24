@@ -358,15 +358,15 @@ MUTS = [
     (
         "stale balance-sheet inputs are refused (any age)",
         TOOLS,
-        "if age > MAX_BALANCE_AGE_DAYS:",
-        "if False:",
+        "        if age > MAX_BALANCE_AGE_DAYS:\n            self.stale[item] = (",
+        "        if False:\n            self.stale[item] = (",
         [T_A + "test_stale_share_count_is_refused_not_used"],
     ),
     (
         "an old but usable balance carries an age note (silent)",
         TOOLS,
-        "if age > NOTE_BALANCE_AGE_DAYS:",
-        "if False:",
+        "        if age > NOTE_BALANCE_AGE_DAYS:\n            self.stale[item] = (",
+        "        if False:\n            self.stale[item] = (",
         [T_A + "test_old_but_usable_share_count_is_used_with_an_age_note"],
     ),
     # -- cost ------------------------------------------------------------------------------
@@ -394,7 +394,7 @@ for name, path, old, new, tests in MUTS:
             text=True,
         )
         last = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else r.stderr[-200:]
-        if "no tests ran" in last or "not found" in last or "ERROR" in r.stdout[-400:]:
+        if "no tests ran" in last or "not found" in last or " error" in last:
             raise SystemExit(f"mutation {name!r}: its tests did not run: {last}")
         caught = r.returncode != 0
         missed += not caught

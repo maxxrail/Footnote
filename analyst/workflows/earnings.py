@@ -332,7 +332,7 @@ def _write(state: State, ctx: Context) -> State:
     ctx.out_dir.mkdir(parents=True, exist_ok=True)
     label = state["label"].replace(" ", "")
     path = ctx.out_dir / f"earnings_{state['company']['ticker']}_{label}.md"
-    path.write_text(md, encoding="utf-8")
+    path.write_text(md.rstrip() + "\n", encoding="utf-8")
     state["path"] = path
     return state
 

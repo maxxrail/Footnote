@@ -103,7 +103,7 @@ def _financials(state: State, ctx: Context) -> State:
             num, rev = series[key].get(y), series["revenue"].get(y)
             margins[label][y] = fin.margin(_op(t, num), _op(t, rev), f"{label.lower()}_margin")
     state["years"], state["series"], state["margins"] = years, series, margins
-    state["split_warning"] = split_warning(series["eps_diluted"], series["net_income"])
+    state["split_warning"] = split_warning(series["eps_diluted"], series["net_income"], years)
     return state
 
 
@@ -122,26 +122,34 @@ def _op(ticker: str, p: SeriesPoint | None) -> Operand | None:
     )
 
 
-def split_warning(eps: dict[int, SeriesPoint], net_income: dict[int, SeriesPoint]) -> str:
+def split_warning(
+    eps: dict[int, SeriesPoint],
+    net_income: dict[int, SeriesPoint],
+    years: list[int] | None = None,
+) -> str:
     """Per-share values come from the latest filing that reported each year, so a stock
     split can leave early years unadjusted (NVIDIA FY2022 EPS $3.85 pre-split next to
     FY2023 $0.17 post-split). The share count implied by net income / EPS then jumps by
-    the split ratio; flag any jump of 1.8x or more between consecutive years."""
+    the split ratio. Flags every jump of 1.8x or more between consecutive `years` (the
+    years the table shows; all years if None)."""
+    shown = sorted(eps) if years is None else sorted(years)
     implied = {
         y: net_income[y].value / eps[y].value
-        for y in sorted(eps)
-        if y in net_income and eps[y].value > 0 and net_income[y].value > 0
+        for y in shown
+        if y in eps and y in net_income and eps[y].value > 0 and net_income[y].value > 0
     }
-    years = sorted(implied)
-    for a, b in itertools.pairwise(years):
+    jumps = []
+    for a, b in itertools.pairwise(sorted(implied)):
         ratio = implied[b] / implied[a]
         if ratio >= SPLIT_RATIO or ratio <= 1 / SPLIT_RATIO:
-            return (
-                f"Per-share values may mix split bases: the share count implied by net income / "
-                f"diluted EPS changes {ratio:.1f}x from FY{a} to FY{b}, which looks like a stock "
-                f"split; values up to FY{a} are as originally reported, not split-adjusted."
-            )
-    return ""
+            jumps.append(f"{ratio:.1f}x from FY{a} to FY{b}")
+    if not jumps:
+        return ""
+    return (
+        "Per-share values may mix split bases: the share count implied by net income / diluted "
+        f"EPS changes {', '.join(jumps)}, which looks like a stock split; EPS before the jump is "
+        "as originally reported, not split-adjusted."
+    )
 
 
 def _chart(state: State, ctx: Context) -> State:
@@ -242,7 +250,7 @@ def _write(state: State, ctx: Context) -> State:
     t = state["company"]["ticker"]
     base = ctx.out_dir / f"tearsheet_{t}_{ctx.today.isoformat()}"
     md_path, pdf_path = base.with_suffix(".md"), base.with_suffix(".pdf")
-    md_path.write_text(md, encoding="utf-8")
+    md_path.write_text(md.rstrip() + "\n", encoding="utf-8")
     state["profile_pages"] = build_pdf(state, notes, pdf_path)
     state["paths"] = [pdf_path, md_path, state["chart"]]
     return state
