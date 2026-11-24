@@ -50,6 +50,7 @@ EXCERPT_CHARS = 1500
 # tag share counts only in the 10-K), refused after 400 (Citigroup's last tag is FY2010).
 NOTE_BALANCE_AGE_DAYS = 100
 MAX_BALANCE_AGE_DAYS = 400
+COVER_SHARES = "dei:EntityCommonStockSharesOutstanding"
 MATCH_CUTOFF = 0.75
 
 
@@ -555,7 +556,7 @@ def _derived_computed(ticker: str, p: DerivedPoint) -> Computed:
 
 
 @dataclass
-class _Data:
+class CompanyData:
     """Lazy per-company series lookups for one compute call."""
 
     s: Session
@@ -602,12 +603,67 @@ class _Data:
             )
         return _fact_operand(self.co.ticker, pts[-1])
 
+    def cover_shares(self) -> Operand | None:
+        """The latest cover-page share count (`dei:EntityCommonStockSharesOutstanding`),
+        dated a few weeks after the period end, as of a date near the filing."""
+        row = self.s.execute(
+            select(Fact.id, Fact.value, Fact.period_end, Fact.accession)
+            .join(Filing, Filing.accession == Fact.accession)
+            .where(
+                Fact.cik == self.co.cik,
+                Fact.concept == COVER_SHARES,
+                Fact.unit == "shares",
+            )
+            .order_by(Fact.period_end.desc(), Filing.filed_at.desc(), Fact.id.desc())
+            .limit(1)
+        ).first()
+        if row is None:
+            return None
+        return Operand(
+            f"{self.co.ticker} shares outstanding (cover page, {row.period_end})",
+            row.value,
+            (row.id,),
+            "fact",
+            row.accession,
+            None,
+            row.period_end,
+            "shares",
+        )
+
+    def market_cap_shares(self) -> Operand | None:
+        """Shares for market cap: the newer of the balance-sheet count and the cover-page
+        count. Citigroup, PNC and Texas Instruments tag only the cover page recently."""
+        bs = self.latest_instant("shares_outstanding")
+        cover = self.cover_shares()
+        if cover is None or cover.period_end is None:
+            return bs
+        if bs is not None and bs.period_end is not None and bs.period_end >= cover.period_end:
+            return bs
+        latest = self.balance_sheet_date()
+        age = (latest - cover.period_end).days if latest is not None else 0
+        if age > MAX_BALANCE_AGE_DAYS:
+            cover_note = (
+                f"latest cover-page share count is from {cover.period_end}, more than "
+                f"{MAX_BALANCE_AGE_DAYS} days before the latest balance sheet ({latest}); "
+                "not used"
+            )
+            earlier = self.stale.get("shares_outstanding")
+            self.stale["shares_outstanding"] = f"{earlier}; {cover_note}" if earlier else cover_note
+            return bs
+        self.stale.pop("shares_outstanding", None)  # replaced by the cover count
+        if age > NOTE_BALANCE_AGE_DAYS:
+            self.stale["shares_outstanding"] = (
+                f"cover-page share count is as of {cover.period_end}, {age} days before the "
+                f"latest balance sheet ({latest}); a later split or buyback would not be reflected"
+            )
+        return cover
+
     def ltm_op(self, item: str) -> Computed:
         qs = [_fact_operand(self.co.ticker, p) for p in quarterly_series(self.s, self.co.cik, item)]
         return fin.ltm(qs, metric=f"ltm_{item}")
 
 
-def _target_year(d: _Data, item: str, requested: int | None) -> int | None:
+def target_year(d: CompanyData, item: str, requested: int | None) -> int | None:
     if requested is not None:
         return requested
     years = sorted(d.fy(item))
@@ -619,12 +675,12 @@ def _ltm_end(c: Computed) -> dt.date | None:
     return max(ends) if ends else None
 
 
-def _flow(d: _Data, item: str) -> tuple[Operand | None, str]:
+def flow(d: CompanyData, item: str) -> tuple[Operand | None, str]:
     """LTM of a flow item if four contiguous quarters exist and end no earlier than the
     latest fiscal year; otherwise the latest fiscal year. The basis names the window
     ("LTM to 2025-12-31" or "FY2025") so two flows can be checked for the same window."""
     last12 = d.ltm_op(item)
-    year = _target_year(d, item, None)
+    year = target_year(d, item, None)
     fy_end = d.fy(item)[year].period_end if year is not None else None
     end = _ltm_end(last12)
     if last12.value is not None and end is not None and (fy_end is None or end >= fy_end):
@@ -632,11 +688,11 @@ def _flow(d: _Data, item: str) -> tuple[Operand | None, str]:
     return (d.fy_op(item, year) if year else None), f"FY{year}" if year else "none"
 
 
-def _ebitda_flow(d: _Data) -> tuple[Operand | None, str]:
-    oi, oi_basis = _flow(d, "operating_income")
-    da, da_basis = _flow(d, "d_and_a")
+def ebitda_flow(d: CompanyData) -> tuple[Operand | None, str]:
+    oi, oi_basis = flow(d, "operating_income")
+    da, da_basis = flow(d, "d_and_a")
     if oi_basis != da_basis:  # same window for both legs, else fall back to the same FY
-        year = _target_year(d, "operating_income", None)
+        year = target_year(d, "operating_income", None)
         if year is None:
             return None, "none"
         oi, da, oi_basis = d.fy_op("operating_income", year), d.fy_op("d_and_a", year), f"FY{year}"
@@ -646,13 +702,13 @@ def _ebitda_flow(d: _Data) -> tuple[Operand | None, str]:
     ), oi_basis
 
 
-def _price(d: _Data, prices: PriceProvider) -> Operand | None:
+def _price(d: CompanyData, prices: PriceProvider) -> Operand | None:
     q = prices.latest(d.co.ticker)
     return q.as_operand() if q else None
 
 
 def _compute_one(s: Session, co: Company, args: ComputeInput, prices: PriceProvider) -> Computed:
-    d = _Data(s, co)
+    d = CompanyData(s, co)
     t = co.ticker
     m = args.metric
 
@@ -661,7 +717,7 @@ def _compute_one(s: Session, co: Company, args: ComputeInput, prices: PriceProvi
         return Computed(c.metric, c.value, c.formula, c.inputs, c.unit, notes, label)
 
     if m in ("growth", "cagr"):
-        year = _target_year(d, args.item, args.fiscal_year)
+        year = target_year(d, args.item, args.fiscal_year)
         if year is None:
             return Computed(
                 m, None, "", (), note=f"no {args.item} reported", label=f"{t} {args.item} {m}"
@@ -674,7 +730,7 @@ def _compute_one(s: Session, co: Company, args: ComputeInput, prices: PriceProvi
     if m == "ltm":
         return labelled(d.ltm_op(args.item), f"{t} {args.item} LTM")
     if m in ("gross_margin", "operating_margin", "net_margin", "ebitda", "ebitda_margin"):
-        year = _target_year(d, "revenue", args.fiscal_year)
+        year = target_year(d, "revenue", args.fiscal_year)
         if year is None:
             return Computed(m, None, "", (), note="no revenue reported", label=f"{t} {m}")
         rev = d.fy_op("revenue", year)
@@ -699,7 +755,7 @@ def _compute_one(s: Session, co: Company, args: ComputeInput, prices: PriceProvi
             f"fiscal_year {args.fiscal_year} ignored: uses the latest price and balance sheet"
         )
     debt, cash = d.latest_instant("total_debt"), d.latest_instant("cash")
-    shares = d.latest_instant("shares_outstanding")
+    shares = d.market_cap_shares()
     items = {
         "market_cap": ("shares_outstanding",),
         "net_debt_to_ebitda": ("total_debt", "cash"),
@@ -715,13 +771,13 @@ def _compute_one(s: Session, co: Company, args: ComputeInput, prices: PriceProvi
         )
     price_note = "; ".join(notes)
     if m == "pe":
-        year = _target_year(d, "eps_diluted", args.fiscal_year)
+        year = target_year(d, "eps_diluted", args.fiscal_year)
         eps = d.fy_op("eps_diluted", year) if year else None
         basis = f"FY{year} diluted EPS" if year else "no diluted EPS reported"
         pe_note = "" if price else f"no price for {t} in the price file"
         return labelled(fin.pe(price, eps), f"{t} P/E ({basis})", pe_note)
     if m == "net_debt_to_ebitda":
-        eb, basis = _ebitda_flow(d)
+        eb, basis = ebitda_flow(d)
         c = fin.net_debt_to_ebitda(debt, cash, eb)
         return labelled(
             c,
@@ -741,7 +797,7 @@ def _compute_one(s: Session, co: Company, args: ComputeInput, prices: PriceProvi
         return ev
     evo = ev.as_operand(f"{t} EV") if ev.value is not None else None
     if m == "ev_to_revenue":
-        rev, basis = _flow(d, "revenue")
+        rev, basis = flow(d, "revenue")
         return labelled(fin.ev_to_revenue(evo, rev), f"{t} EV / revenue ({basis})", price_note)
-    eb, basis = _ebitda_flow(d)
+    eb, basis = ebitda_flow(d)
     return labelled(fin.ev_to_ebitda(evo, eb), f"{t} EV / EBITDA ({basis})", price_note)
