@@ -5,6 +5,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-24: Part 3, the analyst agent
+
+### Added
+- `analyst/metrics/`: `Operand` / `Computed(value, formula, inputs)` with fact lineage;
+  growth, CAGR, margins, LTM (contiguous quarters only), market cap, EV, EBITDA, EV/Revenue,
+  EV/EBITDA, P/E (None for non-positive EPS), net debt/EBITDA, peer median/mean/quartiles
+  (QUARTILE.INC). Exact `Decimal` math, 100% test coverage.
+- `analyst/metrics/prices.py`: `PriceProvider` protocol and `CsvPriceProvider` over
+  `data/prices.csv` (ships header-only; see README).
+- `analyst/llm/`: `LLMClient` protocol, `AnthropicLLM` (model from `ANTHROPIC_MODEL`, effort
+  from `AGENT_EFFORT`, cached system prompt, server-side refusal fallback), per-run token and
+  dollar accounting, and `ScriptedLLM`, a fake that replays tool calls for tests.
+- `analyst/agent/tools.py`: `resolve_company`, `get_financials`, `compute`, `search_filings`,
+  `list_peers`, `submit_answer`; JSON-schema definitions from Pydantic models. Every returned
+  item has a run-wide `ref` mapped to a `FactCitation`, `ComputedCitation` or filing `Citation`.
+- `analyst/agent/loop.py`: hand-written tool-use loop (max 10 steps, parallel tool calls in
+  one result message, trace of every call with ms, tokens and cost) returning `Answer`.
+- `analyst/agent/postcheck.py`: number post-check (matches within written rounding, % of a
+  ratio, scale words; every number cited; unknown refs flagged) with one repair turn (ADR 0005).
+- `python -m analyst.agent.ask "..."` CLI; `docs/sample_questions.md`; live test
+  `tests/test_agent_live.py` (`-m live`).
+- `scripts/mutation_check_part3.py`: 27 guarantees, each broken on purpose and caught.
+
+### Changed
+- Tests marked `live` skip the no-network and no-default-DB guards (they use the real API
+  and read the real DB); all other tests keep both guards.
+
 ## [0.2.0] - 2026-11-23: Part 2, filing search with citations
 
 ### Added

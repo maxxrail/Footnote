@@ -1,12 +1,12 @@
 # Progress
 
-**Current part:** 2 (in review; acceptance check 3 met on the held-out set, not on the gold set by one query; Maxx to decide). Next: 3
+**Current part:** 3 (in review, v0.3.0, PR open). Next: 4
 
 | Part | Name | Status |
 |------|------|--------|
 | 1 | Financial data layer (SEC EDGAR + XBRL) | done (v0.1.0) |
-| 2 | Filing search with citations (hybrid retrieval) | in review (v0.2.0, PR open): 3 of 4 checks pass, "hybrid ≥ both" met on held-out, not gold (14 vs 15) |
-| 3 | The analyst agent (tools, deterministic math, cited answers) | not started |
+| 2 | Filing search with citations (hybrid retrieval) | done (v0.2.0); check 3 waived by Maxx: hybrid 14/15 vs vector 15/15 on gold, tied 20/20 on held-out |
+| 3 | The analyst agent (tools, deterministic math, cited answers) | in review (v0.3.0, PR open): 4 of 4 checks pass |
 | 4 | Banker deliverables (comps → Excel, tearsheet, earnings brief) | not started |
 | 5 | Evals (golden set, numeric + citation graders, CI gate) | not started |
 | 6 | Ship it (API, web UI, Docker, deploy, observability, demo) | not started |
@@ -53,6 +53,16 @@
 - P2: Test DB isolation fix: tests create their tables with `checkfirst=False` in the throwaway schema and assert every table resolves there before truncating (see Notes for Maxx: incident).
 - P2: Near-duplicate collapsing (same company + section, Jaccard ≥ 0.9) was tried for `orcl-capex` and reverted: recall identical on all three sets (ADR 0004). A second held-out set (`retrieval_holdout2.yaml`) was committed first; every leg scores 10/10 on it.
 - P2: WFC and USB keep Risk Factors and MD&A in Exhibit 13, which isn't downloaded. Their Item 1A/7 are detected but short. Left as-is (ADR 0003 says how to fix).
+- P3: ADR 0005: hand-written tool-use loop over an `LLMClient` protocol (not the SDK tool runner or Managed Agents), answers submitted via a `submit_answer` tool, number post-check with one repair turn.
+- P3: Prices: Stooq (Maxx's choice) blocks automated downloads behind a JavaScript check, so `data/prices.csv` ships header-only and Maxx fills it. Market-based metrics return value null with "no price for X in the price file" until then.
+- P3: Valuation basis: latest price x latest reported shares; debt and cash from the latest balance sheet (10-Q or 10-K); revenue and EBITDA LTM when four contiguous quarters exist (Q4 derived), else the latest fiscal year (the label says which). P/E uses latest FY diluted EPS, because quarterly EPS can't be summed. EBITDA = operating income + D&A, never mixing an LTM and an FY input.
+- P3: `total_debt` is the Part 1 canonical item (LongTermDebt first), so EV may miss short-term borrowings; banks' EV and EBITDA multiples aren't meaningful and aren't special-cased.
+- P3: Ratios are fractions (0.25); tools also return a `display` string ("25.0%", "$1.50B", "9.3x"), so the model can restate a value without doing arithmetic.
+- P3: Post-check skips years, FY/Q labels, form and Item names, dates, and bare integers 0-12 without a unit ("3 years"). It compares absolute values (sign not checked) against every number in any tool output, not only the cited ref; per-citation checks are Part 5.
+- P3: Tool calls in one turn run sequentially (one DB session each) and go back in one user message; "parallel" means the model may issue several per turn.
+- P3: Model `claude-sonnet-5-5` (from `.env`), effort `medium` (`AGENT_EFFORT`), adaptive thinking (model default), cached system prompt + tools, server-side refusal fallback (`fallbacks="default"`).
+- P3: Live tests (`-m live`) skip the no-network and no-default-engine test guards and only read the real DB.
+- P3: After run 1 of the live check (4/5), the system prompt and the repair message were changed to say the `[^n]` marker must be in the same sentence as the number. No test or threshold changed. Run 2: 5/5.
 
 ## Acceptance results
 <!-- Claude Code: paste the output of each part's acceptance checks here when done. -->
@@ -293,6 +303,112 @@ the end-of-document cross-reference index, equal-weight chains, and 8 "company" 
 | 10 | `beautifulsoup4` unused | Removed. |
 | 11 | Stale "tag v0.1.0" note | Removed. |
 
+### Part 3 (2026-11-24)
+
+**1. `pytest`, `ruff` clean; metrics coverage 100%: PASS**
+```
+$ uv run pytest -q --cov=analyst/metrics --cov-report=term
+analyst\metrics\computed.py      40      0   100%
+analyst\metrics\finance.py       92      0   100%
+analyst\metrics\prices.py        42      0   100%
+analyst\metrics\quarters.py      64      0   100%
+analyst\metrics\stats.py         35      0   100%
+TOTAL                           273      0   100%
+216 passed, 8 deselected
+All checks passed!                     (ruff)
+80 files already formatted             (ruff format)
+Success: no issues found in 58 source files   (mypy)
+No new upgrade operations detected.    (alembic check)
+```
+
+**2. Live: 5 sample questions in `docs/sample_questions.md` answered with citations: PASS (run 2, 5/5)**
+
+`uv run pytest -m live tests/test_agent_live.py -s` asserts that each answer is not a refusal, has
+citations, has no unverified or uncited numbers, and that every filing citation still `verify()`s
+against its stored text. Run 1 was 4/5: the NVIDIA answer left two gross-margin percentages
+(both from the filing excerpt) in a sentence whose marker was in the next sentence. After the
+prompt fix (Decisions, P3), run 2:
+```
+8 passed in 58.54s   (5 samples + 2 refusals + doc check)
+```
+Trimmed outputs (answer text, a few sources, trace line; full output in `evals/results/part3_live.md`):
+
+> **Q1. How did NVIDIA's operating margin trend over the last three fiscal years, and what did management attribute the change to?**
+>
+> | Fiscal year | Operating income | Revenue | Operating margin |
+> |---|---|---|---|
+> | FY2024 | $32.97B [^1] | $60.92B [^2] | 54.1% [^3] |
+> | FY2025 | $81.45B [^4] | $130.50B [^5] | 62.4% [^6] |
+> | FY2026 | $130.39B [^7] | $215.94B [^8] | 60.4% [^9] |
+>
+> FY2024: Gross margin rose to 72.7% from 56.9% [^10]. Management cited strong Data Center revenue growth of 217% … [^10]. FY2026: Gross margin fell as the business moved from Hopper HGX systems to Blackwell full-scale datacenter solutions … a $4.5 billion charge for H20 excess inventory and purchase obligations [^12]. …
+>
+> `[^3] NVDA operating_margin FY2024 = 0.5412166377 ratio; NVDA operating_income FY2024 / revenue; from us-gaap:OperatingIncomeLoss 2023-01-30..2024-01-28 [0001045810-26-000021], us-gaap:Revenues …`
+> `[^10] NVDA 10-K filed 2024-02-21, Item 7 (Management's Discussion and Analysis), accession 0001045810-24-000029, chars 204316-208058`
+> `Trace: 8 tool calls over 5 model calls | tokens in 15,657 (+11,936 cached) out 1,871 | cost $0.0587 | 22.7 s | confidence high | repaired`
+
+> **Q2. What was Microsoft's revenue growth in its latest fiscal year, and what does the MD&A say drove it?**
+> Microsoft's revenue rose 17.8% in FY2026, to $331.84B from $281.72B in FY2025 [^1]. The MD&A in the FY2026 10-K says revenue increased $50.1 billion, or 18%, "driven by growth in Microsoft Cloud" [^2]. … Intelligent Cloud: revenue growth was driven by Azure [^2]. … foreign currency had a favorable 2% impact on revenue [^2].
+> `Trace: 5 tool calls over 4 model calls | cost $0.0286 | 6.9 s | confidence high | repaired`
+
+> **Q3. Compare the latest fiscal-year operating margins of Apple, Microsoft and Oracle, and give the peer median.**
+> Microsoft 46.8% [^1], Apple 33.0% [^2], Oracle 30.6% [^3]. The median of the three is 33.0%, which is Apple's margin [^4]. The mean is 36.8% [^5].
+> `Trace: 5 tool calls over 3 model calls | cost $0.0112 | 3.8 s | confidence high`
+
+> **Q4. What does JPMorgan's latest 10-K say about interest rate risk, and what was its net income in the last two fiscal years?**
+> It measures structural interest rate risk mainly through "earnings-at-risk" … [^1]. Earnings-at-risk sensitivities ($B, Dec 31, 2025 vs 2024) [^2]: +100 bps parallel 2.1 vs 2.3; -100 bps (2.4) vs (2.5); … Net income: FY2025 $57.05B [^3]; FY2024 $58.47B [^4].
+> `Trace: 5 tool calls over 4 model calls | cost $0.0351 | 12.1 s | confidence high | repaired`
+
+> **Q5. What was Intel's revenue CAGR over the last three fiscal years, and did it report a net loss in any of them?**
+> Intel's revenue CAGR over the last three fiscal years (FY2022 to FY2025) was -5.7%, as revenue fell from $63.05B [^1] to $52.85B [^2]; the CAGR itself is from [^3]. … FY2024: net loss of $18.76B [^5]. FY2025: net loss of $267.0M [^6].
+> `Trace: 4 tool calls over 3 model calls | cost $0.0104 | 4.5 s | confidence high`
+
+Hand checks: NVDA FY2024 32,972 / 60,922 = 54.1%; INTC (52.85 / 63.05)^(1/3) − 1 = −5.7%; MSFT 331.84 / 281.72 − 1 = 17.8%.
+Cost of all 7 live questions: $0.166 (run 1), $0.156 (run 2); median latency 4.5 s. The first
+`search_filings` in a process loads the embedding model, which is most of Q1's 22.7 s.
+
+**3. A company not in the universe, or a fact not in the filings, gets a refusal: PASS**
+
+> **R1. What was Tesla's revenue in fiscal 2025?** Tesla is not in the covered universe, so its fiscal 2025 revenue is not in the filings I can access. I can't answer this one. `REFUSED`
+>
+> **R2. What was Goldman Sachs's gross profit in its latest fiscal year?** Gross profit is not in the filings. Goldman Sachs does not report a gross profit line item in its XBRL data … The closest reported figure is net revenues … of $58.28B for FY2025 [^1]. That is not the same as gross profit. `REFUSED`
+
+The same behaviour is tested offline with the scripted fake (`test_refusal_for_company_outside_universe`,
+`test_get_financials_missing_item_says_not_in_filings`, `test_compute_refuses_negative_pe_and_missing_price`).
+
+**4. README "Part 3" section with an architecture diagram (Mermaid): PASS**: README.md → "Part 3: The analyst agent".
+
+**Mutation checks** (`uv run python scripts/mutation_check_part3.py`): **27/27** caught on the first run.
+```
+CAUGHT | growth refuses a zero base (only negatives refused) | 1 failed
+CAUGHT | CAGR formula (drop the 1/years root) | 1 failed
+CAUGHT | LTM needs contiguous quarters (skip the gap check) | 1 failed
+CAUGHT | EV = mkt cap + debt - cash (add cash) | 1 failed
+CAUGHT | P/E is None for negative earnings (no guard) | 1 failed
+CAUGHT | quartiles interpolate like QUARTILE.INC (take lower rank) | 1 failed
+CAUGHT | peer stats name the excluded peers (silent) | 1 failed
+CAUGHT | Computed lineage lists its facts (empty) | 2 failed
+CAUGHT | bad price rows raise (skip them) | 1 failed
+CAUGHT | invented numbers are caught (everything matches) | 3 failed
+CAUGHT | rounding tolerance is half a unit (10x looser) | 1 failed
+CAUGHT | percent matches a ratio (no x100) | 1 failed
+CAUGHT | numbers must be cited (every sentence counts as cited) | 2 failed
+CAUGHT | unknown [^ref] markers are flagged (ignored) | 1 failed
+CAUGHT | labels (years, forms) are not numbers (no label stripping) | 1 failed
+CAUGHT | exactly one repair turn (repair forever) | 1 failed
+CAUGHT | a flagged answer is never 'high' confidence (keep the model's) | 1 failed
+CAUGHT | at most 10 steps (15) | 1 failed
+CAUGHT | parallel tool results go back in one message (one message each) | 1 failed
+CAUGHT | tool errors are reported as errors (as success) | 1 failed
+CAUGHT | citations renumbered in order of appearance (keep tool refs) | 1 failed
+CAUGHT | model refusal stops the run (ignored) | 1 failed
+CAUGHT | companies outside the universe aren't matched (any fuzzy match) | 1 failed
+CAUGHT | tools refuse tickers outside the universe (no check) | 1 failed
+CAUGHT | derived Q4 cites all four facts (FY only) | 1 failed
+CAUGHT | compute reports a missing price (silently) | 1 failed
+CAUGHT | cost is per million tokens (per thousand) | 1 failed
+```
+
 ## Notes for Maxx
 <!-- Anything the user has to do by hand (keys, Docker, accounts). -->
 - `.env` holds your `SEC_USER_AGENT` (you created it). It is gitignored.
@@ -303,4 +419,6 @@ the end-of-document cross-reference index, equal-weight chains, and 8 "company" 
 - Real embeddings need `uv sync --extra dev --extra ml` (CPU torch, ~1 GB). The first run downloads the models to `~/.cache/huggingface`. Full index: ~70 s to parse, ~30 min to embed.
 - Embedding runs were killed twice by Claude Code for low memory. Re-running `python -m analyst.retrieval.index` picks up where it stopped. The embedder now loads columns, not ORM objects, so memory stays flat.
 - `analyst_exp` is a scratch DB in the same container (450-token chunks with headers, embedded; the ADR 0004 comparison). Keep it for Part 5 or drop it: `docker exec footnote-db-1 dropdb -U analyst analyst_exp`.
-- After merging: tag `v0.2.0` on main.
+- **Prices:** `data/prices.csv` is empty (header only). Add rows `TICKER,YYYY-MM-DD,close` for the 25 tickers to make P/E, market cap and EV multiples work. Every answer that uses a price cites the row.
+- The live check costs about $0.16 per run of the 7 questions (`uv run pytest -m live tests/test_agent_live.py -s`).
+- After merging: tag `v0.3.0` on main.

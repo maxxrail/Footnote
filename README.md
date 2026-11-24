@@ -6,7 +6,7 @@ specific SEC filing passage or XBRL fact. It also runs banker workflows end to e
 comps to a formula-driven Excel sheet, one-page tearsheets, and earnings briefs. A real eval
 harness measures how accurate it is.
 
-> Status: Part 2 of 6 in review (v0.2.0, data layer + filing search). One spec target ("hybrid ≥ both") is met on the held-out queries but misses by one on the gold set (see Part 2 below). See [PROGRESS.md](PROGRESS.md).
+> Status: Part 3 of 6 in review (v0.3.0: data layer, filing search, and the cited analyst agent). See [PROGRESS.md](PROGRESS.md).
 
 ## What's inside (built in 6 parts)
 1. **Data layer**: SEC EDGAR + XBRL ingestion into Postgres, normalized and traceable
@@ -107,6 +107,63 @@ uv run python -m analyst.retrieval.cli "goodwill impairment" --section "Item 7" 
 uv run python -m analyst.retrieval.evaluate --misses  # recall@5 on the 15-query gold set
 uv run python -m analyst.retrieval.evaluate --misses --gold tests/fixtures/retrieval_holdout.yaml
 uv run python scripts/section_survey.py               # section-detection stats
+```
+
+## Part 3: The analyst agent
+
+Ask a question in plain English; get a short answer where every number and claim carries
+a footnote to an XBRL fact, a computed value (with its formula and the facts behind it) or
+an exact span of filing text.
+
+```mermaid
+flowchart LR
+    Q[Question] --> L[Agent loop<br/>analyst/agent/loop.py<br/>max 10 steps]
+    L <-->|tool calls / results| C[Claude<br/>LLMClient protocol]
+    L --> T{Tools<br/>analyst/agent/tools.py}
+    T --> R[resolve_company<br/>list_peers]
+    T --> F[get_financials]
+    T --> M[compute]
+    T --> S[search_filings]
+    R --> U[(data/universe.csv)]
+    F --> DB[(Postgres<br/>facts, filings)]
+    M --> MET[analyst/metrics<br/>pure Decimal math]
+    MET --> DB
+    MET --> P[(data/prices.csv)]
+    S --> IDX[(chunks<br/>pgvector + FTS)]
+    T -->|every item gets a ref| REG[Citation registry<br/>fact / computed / filing span]
+    C -->|submit_answer| PC{Number post-check<br/>analyst/agent/postcheck.py}
+    PC -->|numbers match tool output,<br/>all cited| A[Answer<br/>text + citations + trace]
+    PC -->|mismatch: one repair turn| C
+    REG --> A
+```
+
+- **The model never does arithmetic.** Reported values come from `get_financials` (XBRL
+  facts, Q4 derived as FY − Q1−Q3 and cited to all four facts). Everything derived (growth,
+  CAGR, LTM, margins, EBITDA, market cap, EV, EV/Revenue, EV/EBITDA, P/E, net debt/EBITDA,
+  peer median/mean/quartiles) comes from `compute`, which calls pure functions in
+  `analyst/metrics/` (100% test coverage). Each result is a `Computed(value, formula, inputs)`
+  whose inputs name their facts.
+- **Every number is checked.** When the model submits its answer, a post-check pulls every
+  number out of the text and compares it, within the rounding it was written with, to the
+  numbers the tools returned in this run ("$1.5 billion" matches 1,523,000,000; "31%" doesn't
+  match a 25% growth). Each sentence with a number must carry a `[^n]` marker. A failure gets
+  one repair turn. If it still fails, the answer is returned flagged (`unverified_numbers`)
+  and marked low confidence, never passed silently.
+- **Refuse rather than guess.** Companies outside `data/universe.csv` and line items a
+  company doesn't report come back from the tools as "not in the filings"; a P/E with
+  negative earnings is `None` with a note.
+- **Trace and cost.** Every model call and tool call is timed; tokens and dollars are summed
+  per run (Sonnet 5.5 prices in `analyst/llm/client.py`).
+- **Prices are the weak spot.** SEC filings have no market prices, so multiples read
+  `data/prices.csv` (`ticker,date,close`), which you maintain by hand. The file ships empty, so
+  market-based metrics answer "no price on file" until you add rows. Every result that uses a
+  price cites the row it used.
+
+```powershell
+uv run python -m analyst.agent.ask "How did NVIDIA's operating margin trend over the last three fiscal years?"
+uv run python -m analyst.agent.ask "..." --json         # full Answer: citations, trace, usage
+uv run pytest -m live tests/test_agent_live.py -s       # the 5 sample questions + refusals (costs ~$)
+uv run python scripts/mutation_check_part3.py           # 27 guarantees, each broken once
 ```
 
 ## Quick start (fills in as parts land)
