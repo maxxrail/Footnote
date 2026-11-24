@@ -71,6 +71,13 @@ def format_answer(a: Answer) -> str:
     return "\n".join(lines)
 
 
+def safe_print(text: str) -> None:
+    """Print text the console can't encode (a Windows code page and a "−" sign) without
+    crashing: unencodable characters become "?" on screen; files and JSON keep them."""
+    enc = sys.stdout.encoding or "utf-8"
+    print(text.encode(enc, errors="replace").decode(enc, errors="replace"))
+
+
 def ask(question: str) -> Answer:  # pragma: no cover - live only
     settings = get_settings()
     toolbox = ToolBox(
@@ -87,7 +94,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - live o
     parser.add_argument("--json", action="store_true", help="print the full Answer as JSON")
     args = parser.parse_args(argv)
     answer = ask(args.question)
-    print(answer.model_dump_json(indent=2) if args.json else format_answer(answer))
+    safe_print(answer.model_dump_json(indent=2) if args.json else format_answer(answer))
     return 0
 
 

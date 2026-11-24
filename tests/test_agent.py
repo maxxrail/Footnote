@@ -716,3 +716,16 @@ def test_market_cap_has_no_note_about_debt_or_cash_dates(
         )  # fmt: skip
     assert "different dates" not in compute(box, "market_cap")["note"]
     assert "different dates" in compute(box, "net_debt_to_ebitda")["note"]
+
+
+def test_safe_print_survives_a_narrow_console(monkeypatch: pytest.MonkeyPatch) -> None:
+    import io
+    import sys
+
+    from analyst.agent.ask import safe_print
+
+    buf = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    monkeypatch.setattr(sys, "stdout", buf)
+    safe_print("CAGR was −5.7% [^1]")  # U+2212 isn't in cp1252
+    buf.flush()
+    assert buf.buffer.getvalue().startswith(b"CAGR was ?5.7% [^1]")

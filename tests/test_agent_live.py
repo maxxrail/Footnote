@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from analyst.agent.ask import ask, format_answer
+from analyst.agent.ask import ask, format_answer, safe_print
 from analyst.agent.loop import Answer
 from analyst.db.session import session_scope
 from analyst.retrieval.citation import Citation, verify
@@ -37,7 +37,7 @@ SAMPLES, REFUSALS = _questions()
 
 def _record(a: Answer) -> None:
     out = format_answer(a)
-    print(f"\n=== {a.question}\n{out}")
+    safe_print(f"\n=== {a.question}\n{out}")
     OUT.parent.mkdir(parents=True, exist_ok=True)
     with OUT.open("a", encoding="utf-8") as f:
         f.write(f"## {a.question}\n\n```\n{out}\n```\n\n")

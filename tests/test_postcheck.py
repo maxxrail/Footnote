@@ -322,3 +322,10 @@ def test_numbered_lists_check_only_the_amounts() -> None:
 def test_excerpt_direction_is_kept() -> None:
     assert ok2("Gaming revenue rose 41% [^8].")
     assert not ok2("Gaming revenue fell 41% [^8].")
+
+
+def test_repair_message_quotes_the_sentences_with_problems() -> None:
+    text = "Revenue was $1.50B [^1]. The table shows 2.1 vs 2.3 and 31%. Growth was 25% [^2]."
+    r = check(text, OUT, "q", REFS)
+    assert r.flagged_sentences == ["The table shows 2.1 vs 2.3 and 31%."]
+    assert '"The table shows 2.1 vs 2.3 and 31%."' in r.problems()

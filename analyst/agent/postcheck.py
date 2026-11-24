@@ -297,6 +297,8 @@ class CheckResult:
     unverified_numbers: list[str] = field(default_factory=list)
     uncited_numbers: list[str] = field(default_factory=list)
     miscited_numbers: list[str] = field(default_factory=list)
+    # the sentences each problem was found in, quoted in the repair message
+    flagged_sentences: list[str] = field(default_factory=list)
     unknown_refs: list[int] = field(default_factory=list)
     no_citations: bool = False
 
@@ -338,7 +340,15 @@ class CheckResult:
                 "The answer cites nothing. Cite the tool results it relies on, or set "
                 "refused to true if the corpus can't answer the question."
             )
+        if self.flagged_sentences:
+            quoted = " | ".join(_short(x) for x in self.flagged_sentences[:6])
+            lines.append(f"The sentences with problems: {quoted}")
         return " ".join(lines)
+
+
+def _short(sentence: str, limit: int = 160) -> str:
+    one = " ".join(sentence.split())
+    return f'"{one}"' if len(one) <= limit else f'"{one[:limit]}…"'
 
 
 def check(
@@ -363,6 +373,11 @@ def check(
         if not nums:
             continue
         cited_refs = {int(r) for r in MARKER.findall(sentence)} & known
+        flagged_before = (
+            len(result.unverified_numbers)
+            + len(result.uncited_numbers)
+            + len(result.miscited_numbers)
+        )
         cited_vals = [v for r in cited_refs for v in by_ref.get(r, [])]
         echoes: list[Num] = []
         verified: list[Num] = []
@@ -378,6 +393,9 @@ def check(
         for e in echoes:
             if not _comparison_holds(e, verified, _strip_labels(sentence)):
                 result.unverified_numbers.append(e.raw)
+        found = result.unverified_numbers + result.uncited_numbers + result.miscited_numbers
+        if len(found) > flagged_before:
+            result.flagged_sentences.append(sentence.strip())
     return result
 
 
