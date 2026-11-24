@@ -1,14 +1,14 @@
 # Progress
 
-**Current part:** 4 (in review, v0.4.0, PR open). Next: 5
+**Current part:** 5 (in progress). Next: 6
 
 | Part | Name | Status |
 |------|------|--------|
 | 1 | Financial data layer (SEC EDGAR + XBRL) | done (v0.1.0) |
 | 2 | Filing search with citations (hybrid retrieval) | done (v0.2.0); check 3 waived by Maxx: hybrid 14/15 vs vector 15/15 on gold, tied 20/20 on held-out |
 | 3 | The analyst agent (tools, deterministic math, cited answers) | done (v0.3.0) |
-| 4 | Banker deliverables (comps → Excel, tearsheet, earnings brief) | in review (v0.4.0, PR open): checks 1, 2, 4 pass; check 3 recalculated in LibreOffice (no Excel installed), Excel itself not yet |
-| 5 | Evals (golden set, numeric + citation graders, CI gate) | not started |
+| 4 | Banker deliverables (comps → Excel, tearsheet, earnings brief) | done (v0.4.0); check 3 recalculated in LibreOffice, not Excel |
+| 5 | Evals (golden set, numeric + citation graders, CI gate) | in progress |
 | 6 | Ship it (API, web UI, Docker, deploy, observability, demo) | not started |
 
 ## Decisions
@@ -622,4 +622,4 @@ full stop ("…25%. [^9]"), and the post-check read them as a new sentence (ever
 - **Prices:** `data/prices.csv` has closes to 2026-11-23 (Yahoo Finance). Refresh before a demo with `uv run python scripts/fetch_prices.py`; a stale file just means older prices, and each answer cites the price date.
 - The live check costs about $0.14-0.17 per run of the 7 questions (`uv run pytest -m live tests/test_agent_live.py -s`).
 - **Optional: open one comps workbook in real Excel** (Excel for the web works; Excel desktop isn't installed). LibreOffice already recalculated all three with no errors. A screenshot of the Comps sheet would fill the README placeholder.
-- After merging: tag `v0.4.0` on main.
+- After merging: tag `v0.5.0` on main.
