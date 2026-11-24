@@ -337,3 +337,11 @@ def test_percentage_points_and_basis_points_match_a_ratio_change() -> None:
                  "Margin rose 120 bps [^1].", "Margin rose 120 basis points [^1]."):  # fmt: skip
         assert check(text, [out], "q", [1]).ok, text
     assert not check("Margin rose 150 bps [^1].", [out], "q", [1]).ok
+
+
+def test_markers_after_the_full_stop_belong_to_that_sentence() -> None:
+    assert ok("Revenue was $1.5 billion. [^1] Growth was 25%. [^2]")
+    assert ok("- Revenue was $1.5 billion, up 25%. [^1][^2]\n- Margin was 25%. [^2]")
+    # but a marker in the next sentence still doesn't cover an earlier number
+    r = check("Revenue was $1.5 billion. Growth was 25% [^2].", OUT, "q", REFS)
+    assert r.uncited_numbers == ["$1.5 billion"]

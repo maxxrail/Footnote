@@ -196,6 +196,13 @@ MUTS = [
         "        cited = []",
         [T_D + "test_earnings_footnotes_cite_full_xbrl_facts"],
     ),
+    (
+        "markers after the full stop belong to that sentence (split off)",
+        "analyst/agent/postcheck.py",
+        r'_SENTENCE = re.compile(r"(?<=[.!?;])[ \t]+(?!\[\^)|\n+")',
+        r'_SENTENCE = re.compile(r"(?<=[.!?;])\s+|\n+")',
+        ["tests/test_postcheck.py::test_markers_after_the_full_stop_belong_to_that_sentence"],
+    ),
 ]
 
 missed = 0

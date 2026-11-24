@@ -120,7 +120,8 @@ _LESS = re.compile(
 _MORE = re.compile(r"\b(?:above|over|exceed\w*|more than|higher than|greater than|topped)\b", re.I)
 # Sentences, table rows and list items. Splits after . ! ? ; even before a digit or a
 # lowercase word (stricter for citations: a marker only covers its own clause).
-_SENTENCE = re.compile(r"(?<=[.!?;])\s+|\n+")
+# Markers placed after the full stop ("... 25%. [^9]") still belong to that sentence.
+_SENTENCE = re.compile(r"(?<=[.!?;])[ \t]+(?!\[\^)|\n+")
 
 
 @dataclass(frozen=True)
