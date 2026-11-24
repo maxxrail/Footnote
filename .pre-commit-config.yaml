@@ -13,6 +13,7 @@ repos:
       - id: trailing-whitespace
       - id: check-yaml
       - id: check-added-large-files
+        args: ["--maxkb=1024"] # the eval seed corpus fixture (filings.json.gz) is ~830 KB
       - id: check-merge-conflict
       # Blocks committing a private key. CI runs gitleaks on every commit.
       - id: detect-private-key

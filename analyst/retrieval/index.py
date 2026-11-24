@@ -32,7 +32,7 @@ from analyst.db.session import session_scope
 from analyst.edgar.ingest import document_path
 from analyst.retrieval.chunk import MAX_TOKENS, OVERLAP_TOKENS, chunk_filing
 from analyst.retrieval.embed import Embedder, default_embedder, embed_pending
-from analyst.retrieval.parse import PARSER_VERSION, parse_filing, section_title
+from analyst.retrieval.parse import PARSER_VERSION, ParsedFiling, parse_filing, section_title
 
 log = logging.getLogger("analyst.retrieval.index")
 
@@ -82,7 +82,22 @@ def index_filing(
         and existing.source_sha256 == sha
     ):
         return None
-    parsed = parse_filing(html, filing.form)
+    return store_parsed(
+        session, filing, parse_filing(html, filing.form), sha, existing, max_tokens, overlap_tokens
+    )
+
+
+def store_parsed(
+    session: Session,
+    filing: Filing,
+    parsed: ParsedFiling,
+    source_sha256: str,
+    existing: FilingText | None = None,
+    max_tokens: int = MAX_TOKENS,
+    overlap_tokens: int = OVERLAP_TOKENS,
+) -> int:
+    """Write a parsed filing's text, sections and chunks (replacing any earlier version).
+    Used by the indexer and by the eval seed, which loads already-parsed text."""
     if existing is not None:
         # cascades to sections and chunks; the text changes, so old spans must go
         session.delete(existing)
@@ -92,7 +107,7 @@ def index_filing(
             accession=filing.accession,
             text=parsed.text,
             parser_version=PARSER_VERSION,
-            source_sha256=sha,
+            source_sha256=source_sha256,
         )
     )
     session.flush()
