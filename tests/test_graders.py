@@ -83,6 +83,7 @@ def fact(box: ToolBox, metric: str = "revenue", year: int = 2025) -> FactCitatio
             True,
         ),
         ("Revenue grew 25.0% from $1.2B to $1.5B.", "0.25", "ratio", True),  # % before $
+        ("Revenue went from $1.2B to $1.5B, up 25.0%.", "0.25", "ratio", True),  # $ first
         ("Revenue grew 26%.", "0.25", "ratio", False),
         ("Revenue fell 5.7% a year.", "-0.0571", "ratio", True),
         ("Revenue grew 5.7% a year.", "-0.0571", "ratio", False),  # wrong direction
