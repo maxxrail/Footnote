@@ -30,9 +30,16 @@ TEST_UA = "analyst-agent-tests tests@example.com"
 TEST_SCHEMAS: dict[Engine, str] = {}  # engine -> its throwaway schema
 
 
+def _is_live(request: pytest.FixtureRequest) -> bool:
+    """`@pytest.mark.live` tests (skipped by default; `-m live`) use the real API and DB."""
+    return request.node.get_closest_marker("live") is not None
+
+
 @pytest.fixture(autouse=True)
-def _no_internet(monkeypatch: pytest.MonkeyPatch) -> None:
+def _no_internet(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
     """Tests must not reach the network: only loopback (the test Postgres) is allowed."""
+    if _is_live(request):
+        return
     real_connect = socket.socket.connect
 
     def guarded(self: socket.socket, address: object) -> None:
@@ -45,9 +52,12 @@ def _no_internet(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _no_default_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+def _no_default_engine(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
     """Code under test must get the test engine/session injected. Falling back to the
-    default engine would read and write the real dev DB's public tables."""
+    default engine would read and write the real dev DB's public tables. Live tests read
+    the real DB on purpose (and only read it)."""
+    if _is_live(request):
+        return
 
     def refuse(url: str | None = None) -> Engine:
         raise RuntimeError("test used the default DB engine; inject a session or engine")

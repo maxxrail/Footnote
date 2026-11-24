@@ -1,12 +1,12 @@
 # Progress
 
-**Current part:** 2 (in review; acceptance check 3 met on the held-out set, not on the gold set by one query; Maxx to decide). Next: 3
+**Current part:** 3 (in review, v0.3.0, PR open). Next: 4
 
 | Part | Name | Status |
 |------|------|--------|
 | 1 | Financial data layer (SEC EDGAR + XBRL) | done (v0.1.0) |
-| 2 | Filing search with citations (hybrid retrieval) | in review (v0.2.0, PR open): 3 of 4 checks pass, "hybrid ≥ both" met on held-out, not gold (14 vs 15) |
-| 3 | The analyst agent (tools, deterministic math, cited answers) | not started |
+| 2 | Filing search with citations (hybrid retrieval) | done (v0.2.0); check 3 waived by Maxx: hybrid 14/15 vs vector 15/15 on gold, tied 20/20 on held-out |
+| 3 | The analyst agent (tools, deterministic math, cited answers) | in review (v0.3.0, PR open): 4 of 4 checks pass |
 | 4 | Banker deliverables (comps → Excel, tearsheet, earnings brief) | not started |
 | 5 | Evals (golden set, numeric + citation graders, CI gate) | not started |
 | 6 | Ship it (API, web UI, Docker, deploy, observability, demo) | not started |
@@ -53,6 +53,17 @@
 - P2: Test DB isolation fix: tests create their tables with `checkfirst=False` in the throwaway schema and assert every table resolves there before truncating (see Notes for Maxx: incident).
 - P2: Near-duplicate collapsing (same company + section, Jaccard ≥ 0.9) was tried for `orcl-capex` and reverted: recall identical on all three sets (ADR 0004). A second held-out set (`retrieval_holdout2.yaml`) was committed first; every leg scores 10/10 on it.
 - P2: WFC and USB keep Risk Factors and MD&A in Exhibit 13, which isn't downloaded. Their Item 1A/7 are detected but short. Left as-is (ADR 0003 says how to fix).
+- P3: ADR 0005: hand-written tool-use loop over an `LLMClient` protocol (not the SDK tool runner or Managed Agents), answers submitted via a `submit_answer` tool, number post-check with one repair turn.
+- P3: Prices: Stooq (Maxx's first choice) blocks automated downloads behind a JavaScript check. When Maxx asked for prices to be added, they came from Yahoo Finance's public chart API instead: no key, no personal data, 25 requests 0.5 s apart, raw responses kept in `data/raw/prices/`. `data/prices.csv` has 525 completed daily closes (2026-10-26 to 2026-11-23). Refresh with `uv run python scripts/fetch_prices.py`.
+- P3: Market cap = latest price x latest reported share count. Checking all 25 with real prices found Citigroup's last `CommonStockSharesOutstanding` is from FY2010 (29.0B, before its 1-for-10 reverse split), which gave a $3.3T market cap. Rule: a balance-sheet input more than 400 days before the latest balance sheet is refused (C, PNC 2014, WDAY 2012). One more than 100 days old is used with an age note (NVDA, CRM, ADSK, JPM, USB tag share counts only in 10-Ks). TXN has none. A split inside the window isn't detected. `dei:EntityCommonStockSharesOutstanding` (cover page) would fill the gaps; not done.
+- P3: Valuation basis: latest price x latest reported shares; debt and cash from the latest balance sheet (10-Q or 10-K); revenue and EBITDA LTM when four contiguous quarters exist (Q4 derived), else the latest fiscal year (the label says which). P/E uses latest FY diluted EPS, because quarterly EPS can't be summed. EBITDA = operating income + D&A, never mixing an LTM and an FY input.
+- P3: `total_debt` is the Part 1 canonical item (LongTermDebt first), so EV may miss short-term borrowings; banks' EV and EBITDA multiples aren't meaningful and aren't special-cased.
+- P3: Ratios are fractions (0.25); tools also return a `display` string ("25.0%", "$1.50B", "9.3x"), so the model can restate a value without doing arithmetic.
+- P3: Post-check (rebuilt after review, ADR 0005): each number must match a typed value of the ref cited in its sentence (unit kind, written rounding, stated sign). Skipped as labels: years, FY/Q, form/Item/Note/Tier/Level names, dates, list numbering, and integers 0-12 before a count word. Claims without numbers aren't citation-checked beyond "cite something" (Part 5).
+- P3: Tool calls in one turn run sequentially (one DB session each) and go back in one user message; "parallel" means the model may issue several per turn.
+- P3: Model `claude-sonnet-5-5` (from `.env`), effort `medium` (`AGENT_EFFORT`), adaptive thinking (model default), cached system prompt + tools, server-side refusal fallback (`fallbacks="default"`).
+- P3: Live tests (`-m live`) skip the no-network and no-default-engine test guards and only read the real DB.
+- P3: After run 1 of the live check (4/5), the system prompt and the repair message were changed to say the `[^n]` marker must be in the same sentence as the number. No test or threshold changed. Run 2: 5/5; run 3 (post-check rebuilt): 5/5; run 4 (second review): 4/5, JPM flagged for a marker in the next sentence; run 5 (repair message quotes the sentences): 5/5.
 
 ## Acceptance results
 <!-- Claude Code: paste the output of each part's acceptance checks here when done. -->
@@ -293,6 +304,178 @@ the end-of-document cross-reference index, equal-weight chains, and 8 "company" 
 | 10 | `beautifulsoup4` unused | Removed. |
 | 11 | Stale "tag v0.1.0" note | Removed. |
 
+### Part 3 (2026-11-24)
+
+**1. `pytest`, `ruff` clean; metrics coverage 100%: PASS**
+```
+$ uv run pytest -q --cov=analyst/metrics --cov-report=term
+analyst\metrics\computed.py      40      0   100%
+analyst\metrics\finance.py       92      0   100%
+analyst\metrics\prices.py        42      0   100%
+analyst\metrics\quarters.py      64      0   100%
+analyst\metrics\stats.py         35      0   100%
+analyst\metrics\yahoo.py         42      0   100%
+TOTAL                           315      0   100%
+257 passed, 8 deselected
+All checks passed!                     (ruff)
+80 files already formatted             (ruff format)
+Success: no issues found in 58 source files   (mypy)
+No new upgrade operations detected.    (alembic check)
+```
+
+**2. Live: 5 sample questions in `docs/sample_questions.md` answered with citations: PASS (run 5, 5/5)**
+
+`uv run pytest -m live tests/test_agent_live.py -s` asserts that each answer is not a refusal, has
+citations, has no unverified, uncited or miscited numbers, and that every filing citation still
+`verify()`s against its stored text. There were five runs:
+
+| Run | What changed before it | Samples | Notes |
+|---|---|---|---|
+| 1 | first version | 4/5 | NVIDIA: a marker sat in the next sentence |
+| 2 | marker wording in the prompt and repair message | 5/5 | |
+| 3 | post-check rebuilt (review 1) | 5/5 | |
+| 4 | review 2 fixes | 4/5 | JPM sentence flagged (correctly) and left at low confidence; the test also crashed printing a "−" |
+| 5 | repair message quotes the flagged sentences; console-safe print | **5/5** | this is the run reported below |
+
+```
+8 passed in 56.56s   (5 samples + 2 refusals + doc check)
+```
+Whether a run passes is stochastic. When the model ignores the repair, the answer comes back
+flagged, which is the designed outcome. Trimmed run 5 outputs (answer text, a few sources,
+trace line; full output in `evals/results/part3_live.md`):
+
+> **Q1. How did NVIDIA's operating margin trend over the last three fiscal years, and what did management attribute the change to?**
+>
+> | Fiscal year | Operating income | Revenue | Operating margin |
+> |---|---|---|---|
+> | FY2024 | $32.97B [^1] | $60.92B [^2] | 54.1% [^3] |
+> | FY2025 | $81.45B [^4] | $130.50B [^5] | 62.4% [^6] |
+> | FY2026 | $130.39B [^7] | $215.94B [^8] | 60.4% [^9] |
+>
+> FY2024: Gross margin rose to 72.7% from 56.9% [^10]. Management cited Data Center revenue growth of 217% and lower net inventory provisions as a percentage of revenue [^10]. FY2025: Gross margin increased on a higher mix of Data Center revenue. Operating expenses rose 45% … [^11]. FY2026: Gross margin decreased as the business moved from Hopper HGX systems to Blackwell full-scale datacenter solutions. A $4.5B charge for H20 excess inventory and purchase obligations also weighed on it [^12]. …
+>
+> `[^3] NVDA operating_margin FY2024 = 0.5412166377 ratio; NVDA operating_income FY2024 / revenue; from us-gaap:OperatingIncomeLoss 2023-01-30..2024-01-28 [0001045810-26-000021], us-gaap:Revenues …`
+> `Trace: 8 tool calls over 5 model calls | tokens in 15,646 (+14,920 cached) out 1,830 | cost $0.0511 | 21.5 s | confidence high | repaired`
+
+> **Q2. What was Microsoft's revenue growth in its latest fiscal year, and what does the MD&A say drove it?**
+> Microsoft's revenue grew 17.8% in fiscal 2026, to $331.84B from $281.72B in fiscal 2025 [^1]. The MD&A in the 10-K filed 2026-07-29 says revenue rose $50.1 billion, or 18%, "driven by growth in Microsoft Cloud." [^2] … Intelligent Cloud: revenue increased, driven by Azure [^2]. … Foreign currency had a favorable 2% impact on revenue [^2].
+> `Trace: 4 tool calls over 3 model calls | cost $0.0158 | 6.0 s | confidence high`
+
+> **Q3. Compare the latest fiscal-year operating margins of Apple, Microsoft and Oracle, and give the peer median.**
+> Microsoft 46.8% [^1], Apple 33.0% [^2], Oracle 30.6% [^3]. The median of the three is 33.0%, which is Apple's margin [^4]. The mean is 36.8% [^5].
+> `Trace: 5 tool calls over 3 model calls | cost $0.0112 | 3.9 s | confidence high`
+
+> **Q4. What does JPMorgan's latest 10-K say about interest rate risk, and what was its net income in the last two fiscal years?**
+> It measures structural interest rate risk mainly through "earnings-at-risk" … [^1]. The 10-K's sensitivity table (in billions, 2025 vs 2024) shows a +100 bps parallel shift at $2.1 vs $2.3, and a -100 bps shift at (2.4) vs (2.5) [^2]. The same table shows a +200 bps shift at 3.7 vs 4.6, and a -200 bps shift at (6.0) vs (4.9) [^2]. Net income: FY2024 $58.47B [^3]; FY2025 $57.05B [^4].
+> `Trace: 5 tool calls over 4 model calls | cost $0.0325 | 9.7 s | confidence high | repaired`
+
+> **Q5. What was Intel's revenue CAGR over the last three fiscal years, and did it report a net loss in any of them?**
+> Intel's revenue CAGR from FY2022 to FY2025 was -5.7% [^1]. Revenue fell from $63.05B in FY2022 [^2] to $52.85B in FY2025 [^3]. … FY2024: net loss of $18.76B [^5]. FY2025: net loss of $267.0M [^6].
+> `Trace: 5 tool calls over 4 model calls | cost $0.0171 | 5.7 s | confidence high | repaired`
+
+Hand checks: NVDA FY2024 32,972 / 60,922 = 54.1%; INTC (52.85 / 63.05)^(1/3) − 1 = −5.7%; MSFT 331.84 / 281.72 − 1 = 17.8%.
+Cost of the 7 live questions per run: $0.166, $0.156, $0.150, ~$0.16, $0.140; about $0.77 in total.
+Run 5 median latency was 5.7 s. The first `search_filings` in a process loads the embedding model.
+
+**3. A company not in the universe, or a fact not in the filings, gets a refusal: PASS (runs 1-5)**
+
+> **R1. What was Tesla's revenue in fiscal 2025?** Tesla is not in the covered universe, so its fiscal 2025 revenue is not in the filings I can access. I can't answer this one. `REFUSED`
+>
+> **R2. What was Goldman Sachs's gross profit in its latest fiscal year?** Gross profit is not in the filings. Goldman Sachs reports no gross profit line in its XBRL data, which is typical for a bank. The closest reported figure is net revenues (revenues net of interest expense) of $58.28B for FY2025 [^1]. That is not a gross profit measure. `REFUSED`
+
+The same behaviour is tested offline with the scripted fake (`test_refusal_for_company_outside_universe`,
+`test_get_financials_missing_item_says_not_in_filings`, `test_compute_refuses_negative_pe_and_missing_price`).
+
+**4. README "Part 3" section with an architecture diagram (Mermaid): PASS**: README.md → "Part 3: The analyst agent".
+
+**Mutation checks** (`uv run python scripts/mutation_check_part3.py`): **48/48** caught. The 2 newest are the stale-balance refusal and its age note.
+- **History:** the first version had 27, all caught. Review 1 added 13 and review 2 added 6.
+- **Weak tests found and fixed:** ratio-to-percent was masked by `display`; the EBITDA-window test
+  never built two LTM windows; the false-"below" comparison case was missing.
+- **Script fix:** it fails if a mutation's tests don't run (a renamed test once counted as "caught").
+```
+CAUGHT | growth refuses a zero base (only negatives refused) | 1 failed
+CAUGHT | CAGR formula (drop the 1/years root) | 1 failed
+CAUGHT | LTM needs contiguous quarters (skip the gap check) | 1 failed
+CAUGHT | EV = mkt cap + debt - cash (add cash) | 1 failed
+CAUGHT | P/E is None for negative earnings (no guard) | 1 failed
+CAUGHT | quartiles interpolate like QUARTILE.INC (take lower rank) | 1 failed
+CAUGHT | peer stats name the excluded peers (silent) | 1 failed
+CAUGHT | Computed lineage lists its facts (empty) | 2 failed
+CAUGHT | bad price rows raise (skip them) | 1 failed
+CAUGHT | invented numbers are caught (everything matches) | 6 failed
+CAUGHT | rounding tolerance is half a unit (10x looser) | 1 failed
+CAUGHT | a ratio is a percentage (no x100) | 1 failed
+CAUGHT | numbers must be cited (every sentence counts as cited) | 2 failed
+CAUGHT | unknown [^ref] markers are flagged (ignored) | 1 failed
+CAUGHT | labels (years, forms) are not numbers (no label stripping) | 1 failed
+CAUGHT | tool values are typed: ids, dates, accessions don't count (raw digits count) | 4 failed, 1 passed
+CAUGHT | units must agree (any kind matches) | 1 failed
+CAUGHT | a number must be in the cited ref (any ref will do) | 1 failed
+CAUGHT | sign must agree (ignored) | 1 failed
+CAUGHT | question numbers only as a comparison (always fine) | 1 failed
+CAUGHT | small integers skipped only before a count word (always skipped) | 1 failed
+CAUGHT | a non-refused answer must cite something (no check) | 1 failed
+CAUGHT | a loss written as a plain level fails (unsigned negatives pass) | 5 failed
+CAUGHT | dollars and shares do not mix (any amount matches) | 1 failed
+CAUGHT | an echoed question number needs a true comparison (any comparison word) | 1 failed
+CAUGHT | list numbering is not a number (checked) | 1 failed
+CAUGHT | filing numbers keep a stated direction (unsigned) | 1 failed
+CAUGHT | exactly one repair turn (repair forever) | 1 failed
+CAUGHT | a flagged answer is never 'high' confidence (keep the model's) | 1 failed
+CAUGHT | at most 10 steps (15) | 1 failed
+CAUGHT | the repair turn counts toward the 10 steps (one extra) | 1 failed
+CAUGHT | unexpected tool exceptions go back as errors (crash the run) | 1 failed
+CAUGHT | refs reset per run (keep old ones) | 1 failed
+CAUGHT | parallel tool results go back in one message (one message each) | 1 failed
+CAUGHT | tool errors are reported as errors (as success) | 1 failed
+CAUGHT | citations renumbered in order of appearance (keep tool refs) | 1 failed
+CAUGHT | model refusal stops the run (ignored) | 1 failed
+CAUGHT | companies outside the universe aren't matched (any fuzzy match) | 1 failed
+CAUGHT | tools refuse tickers outside the universe (no check) | 1 failed
+CAUGHT | derived Q4 cites all four facts (FY only) | 1 failed
+CAUGHT | compute reports a missing price (silently) | 1 failed
+CAUGHT | EBITDA legs share one LTM window (any two LTMs) | 1 failed
+CAUGHT | LTM is not older than the latest fiscal year (any LTM) | 1 failed
+CAUGHT | balance-sheet inputs from different dates are noted (silent) | 1 failed
+CAUGHT | balance-date notes only for inputs the metric uses (all three) | 1 failed
+CAUGHT | cost is per million tokens (per thousand) | 1 failed
+```
+
+**part-reviewer findings and what was done**
+| # | Finding | Action |
+|---|---|---|
+| 1 | Post-check took every digit run in tool JSON (dates, accessions, ref ids) as verified, so "grew 31%" passed once a Dec-31 date was in the trace | **Fixed.** Rebuilt: typed values only (`value`/`display`/`inputs` of ref'd items, excerpt text), unit-aware, matched against the ref cited in the same sentence. Realistic-trace tests and a mutation that restores raw digits. |
+| 2 | Tests used tool output with no dates or accessions, which hid #1 | **Fixed.** Post-check tests use realistic outputs. Agent test: `get_financials` + `compute`, then an invented "31%". |
+| 3 | ADR and README overclaimed ("can't be fooled", "max 10 steps") | **Fixed.** Both rewritten with the actual rules and limits. |
+| 4 | Sign never checked | **Fixed.** A minus, parentheses, or "grew"/"fell" right before the number must agree with the tool value's sign. Filing-text numbers have no sign (documented). |
+| 5 | Bare 0-12 integers always skipped ("P/E is 9") | **Fixed.** Skipped only before a count word ("3 years"). |
+| 6 | A number from the question counted as verified ("Yes, revenue was $200B") | **Fixed in review 2** (review 1's fix still passed "$52.85B [^3], and it exceeded $200 billion"). Allowed only with a comparison word, and Python checks the comparison against the verified number. |
+| 7 | Citation not checked to contain the number | **Fixed.** The number must be in a cited ref's values, otherwise it is `miscited_numbers`. |
+| 8 | Claims without numbers aren't checked; `refused` is the model's call | **Partly fixed.** A non-refused answer that cites nothing is flagged. Claim-level checks are left to Part 5 (ADR 0005). |
+| 9 | EBITDA could mix two LTM windows; a stale LTM could beat a newer FY | **Fixed.** The basis names its window ("LTM to 2025-12-31"), and the legs must match. LTM is used only if it is not older than the latest FY. Tests and mutations for both. |
+| 10 | EV balance-sheet inputs from different dates, with no note | **Fixed.** Noted ("cash at 2026-03-31, …"). Test and mutation. |
+| 11 | `fiscal_year` silently ignored for market metrics; "FY None" label | **Fixed.** Note "fiscal_year … ignored"; label "no diluted EPS reported". |
+| 12 | Repair turn allowed an 11th model call | **Fixed.** The repair counts toward the 10 steps. Test and mutation. |
+| 13 | Sentence split let a later clause's marker cover a number | **Fixed.** Also splits after `;` and before digits or lowercase words. |
+| 14 | Unscaled numbers matched any scale | **Fixed.** By typed matching: "1.52" no longer matches $1.52B. |
+| 15 | `ToolBox.refs` not reset per run | **Fixed.** Cleared at the start of each run. Test and mutation. |
+| 16 | Non-`ToolError` exceptions crashed the run | **Fixed.** Returned to the model as an error result. Test and mutation. |
+
+Second review, after the fixes above:
+| # | Finding | Action |
+|---|---|---|
+| R2-1 | A negative value written without a minus passed ("net income was $18.76B" for a loss; "grew at a CAGR of 5.7%" for −5.7%) | **Fixed.** Needs a loss, decline or "negative" word in its sentence. Tests and mutation. |
+| R2-2 | "Amount" mixed dollars and shares ("$4.37 billion" matched 4,370M shares) | **Fixed.** Dollars match only USD values, "shares" only share counts. Tests and mutation. |
+| R2-3 | Question echo passed with any verified number in the sentence | **Fixed.** Needs a comparison word, and the comparison must be true. Tests and mutation. |
+| R2-4 | Numbered Markdown lists always failed ("1." checked as a number) | **Fixed.** List numbering is blanked before sentence splitting. Test and mutation. |
+| R2-5 | Filing-excerpt numbers lost their stated direction ("fell 41%" passed for "up 41%") | **Fixed.** Signed where the filing states a direction. Any number in the cited excerpt can still match (documented). |
+| R2-6 | ADR said "same unit and agreeing sign"; PROGRESS row 6 said fixed | **Fixed.** ADR reworded, row 6 updated. |
+| R2-7 | Balance-date note mentioned inputs a metric doesn't use | **Fixed.** Per metric (market cap: shares; net debt: debt and cash). Test and mutation. |
+
+Live run 4 also crashed printing a "−" to the Windows console (cp1252). The same would have
+happened in `python -m analyst.agent.ask`. Fixed with `safe_print`, and tested.
+
 ## Notes for Maxx
 <!-- Anything the user has to do by hand (keys, Docker, accounts). -->
 - `.env` holds your `SEC_USER_AGENT` (you created it). It is gitignored.
@@ -303,4 +486,6 @@ the end-of-document cross-reference index, equal-weight chains, and 8 "company" 
 - Real embeddings need `uv sync --extra dev --extra ml` (CPU torch, ~1 GB). The first run downloads the models to `~/.cache/huggingface`. Full index: ~70 s to parse, ~30 min to embed.
 - Embedding runs were killed twice by Claude Code for low memory. Re-running `python -m analyst.retrieval.index` picks up where it stopped. The embedder now loads columns, not ORM objects, so memory stays flat.
 - `analyst_exp` is a scratch DB in the same container (450-token chunks with headers, embedded; the ADR 0004 comparison). Keep it for Part 5 or drop it: `docker exec footnote-db-1 dropdb -U analyst analyst_exp`.
-- After merging: tag `v0.2.0` on main.
+- **Prices:** `data/prices.csv` has closes to 2026-11-23 (Yahoo Finance). Refresh before a demo with `uv run python scripts/fetch_prices.py`; a stale file just means older prices, and each answer cites the price date.
+- The live check costs about $0.14-0.17 per run of the 7 questions (`uv run pytest -m live tests/test_agent_live.py -s`).
+- After merging: tag `v0.3.0` on main.

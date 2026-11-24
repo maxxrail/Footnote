@@ -5,6 +5,37 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-24: Part 3, the analyst agent
+
+### Added
+- `analyst/metrics/`: `Operand` / `Computed(value, formula, inputs)` with fact lineage;
+  growth, CAGR, margins, LTM (contiguous quarters only), market cap, EV, EBITDA, EV/Revenue,
+  EV/EBITDA, P/E (None for non-positive EPS), net debt/EBITDA, peer median/mean/quartiles
+  (QUARTILE.INC). Exact `Decimal` math, 100% test coverage.
+- `analyst/metrics/prices.py`: `PriceProvider` protocol and `CsvPriceProvider` over
+  `data/prices.csv`. `scripts/fetch_prices.py` (`analyst/metrics/yahoo.py`) refreshes it with
+  completed daily closes from Yahoo Finance (525 rows, 25 tickers, to 2026-11-23).
+- Market metrics refuse a balance-sheet input more than 400 days older than the latest balance
+  sheet (Citigroup's FY2010 share count), and note one older than 100 days.
+- `analyst/llm/`: `LLMClient` protocol, `AnthropicLLM` (model from `ANTHROPIC_MODEL`, effort
+  from `AGENT_EFFORT`, cached system prompt, server-side refusal fallback), per-run token and
+  dollar accounting, and `ScriptedLLM`, a fake that replays tool calls for tests.
+- `analyst/agent/tools.py`: `resolve_company`, `get_financials`, `compute`, `search_filings`,
+  `list_peers`, `submit_answer`; JSON-schema definitions from Pydantic models. Every returned
+  item has a run-wide `ref` mapped to a `FactCitation`, `ComputedCitation` or filing `Citation`.
+- `analyst/agent/loop.py`: hand-written tool-use loop (max 10 steps, parallel tool calls in
+  one result message, trace of every call with ms, tokens and cost) returning `Answer`.
+- `analyst/agent/postcheck.py`: number post-check against the cited ref's typed values
+  (kind: %, x, dollars, shares; sign; written rounding; scale words; uncited, miscited and unknown refs flagged;
+  a non-refused answer must cite something) with one repair turn (ADR 0005).
+- `python -m analyst.agent.ask "..."` CLI; `docs/sample_questions.md`; live test
+  `tests/test_agent_live.py` (`-m live`).
+- `scripts/mutation_check_part3.py`: 48 guarantees, each broken on purpose and caught.
+
+### Changed
+- Tests marked `live` skip the no-network and no-default-DB guards (they use the real API
+  and read the real DB); all other tests keep both guards.
+
 ## [0.2.0] - 2026-11-23: Part 2, filing search with citations
 
 ### Added

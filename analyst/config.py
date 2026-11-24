@@ -20,10 +20,20 @@ class Settings(BaseSettings):
     data_dir: Path = Path("data")
     # Part 2: cross-encoder rerank of fused search results (slower; needs the ml extra).
     rerank: bool = False
+    # Part 3: agent. Effort for the tool loop (low | medium | high | xhigh | max).
+    agent_effort: str = "medium"
 
     @property
     def raw_dir(self) -> Path:
         return self.data_dir / "raw"
+
+    @property
+    def universe_csv(self) -> Path:
+        return self.data_dir / "universe.csv"
+
+    @property
+    def prices_csv(self) -> Path:
+        return self.data_dir / "prices.csv"
 
 
 @lru_cache

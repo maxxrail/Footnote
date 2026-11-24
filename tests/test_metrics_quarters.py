@@ -95,3 +95,29 @@ def test_with_derived_q4_adds_only_missing_q4s():
     reported_q4 = pt(D(2025, 4, 1), D(2025, 6, 30), 76441)
     out = with_derived_q4([FY], [Q1, Q2, Q3, reported_q4], "0630")
     assert out[-1] is reported_q4  # a reported value is never replaced by a derived one
+
+
+def test_refuses_when_q1_starts_late() -> None:
+    late_q1 = pt(D(2024, 7, 20), D(2024, 9, 30), 1)  # inside the year but 19 days late
+    assert derive_q4(FY, [late_q1, Q2, Q3], "0630") is None
+
+
+def test_refuses_when_q4_would_be_too_long() -> None:
+    long_fy = pt(D(2024, 7, 1), D(2025, 7, 25), 300000)  # Q4 would be Apr 1 - Jul 25
+    assert derive_q4(long_fy, [Q1, Q2, Q3], "0630") is None
+
+
+def test_quarterly_series_from_the_db(session_factory) -> None:
+    from analyst.metrics.quarters import DerivedPoint, quarterly_series
+    from tests.fin_corpus import seed
+
+    seed(session_factory)
+    with session_factory() as s:
+        rev = quarterly_series(s, 1, "revenue")
+        cash = quarterly_series(s, 1, "cash")
+        missing = quarterly_series(s, 99, "revenue")
+    assert [p.value for p in rev] == [Decimal(v) for v in (340e6, 360e6, 380e6, 420e6)]
+    assert isinstance(rev[-1], DerivedPoint) and rev[-1].method == Q4_METHOD
+    assert all(not isinstance(p, DerivedPoint) for p in cash)  # balances are reported
+    assert [p.period_end.year for p in cash] == [2023, 2024, 2025]
+    assert missing == []
