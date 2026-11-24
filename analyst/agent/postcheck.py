@@ -156,7 +156,9 @@ class CheckResult:
             )
         if self.uncited_numbers:
             lines.append(
-                f"These numbers are in sentences without a [^ref] marker: {self.uncited_numbers}."
+                f"These numbers are in sentences without a [^ref] marker: {self.uncited_numbers}. "
+                "Put a marker in the same sentence as each number (split the sentence or "
+                "repeat the marker; one at the end of a later sentence doesn't count)."
             )
         if self.unknown_refs:
             lines.append(

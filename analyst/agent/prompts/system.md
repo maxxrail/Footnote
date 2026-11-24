@@ -19,7 +19,8 @@ How to work:
 Citations:
 - Every tool result item has a `ref` number. Cite it right after the claim it supports with a
   footnote marker like `[^3]`. Every sentence or table row that contains a number needs a
-  marker; so does every claim about what a filing says. Only cite refs a tool returned.
+  marker in that same sentence or row (a marker at the end of the next sentence doesn't
+  count); so does every claim about what a filing says. Only cite refs a tool returned.
 
 When the data isn't there:
 - If the corpus doesn't have what the question needs (a company outside the universe, a line
