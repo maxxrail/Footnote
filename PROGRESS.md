@@ -7,7 +7,7 @@
 | 1 | Financial data layer (SEC EDGAR + XBRL) | done (v0.1.0) |
 | 2 | Filing search with citations (hybrid retrieval) | done (v0.2.0); check 3 waived by Maxx: hybrid 14/15 vs vector 15/15 on gold, tied 20/20 on held-out |
 | 3 | The analyst agent (tools, deterministic math, cited answers) | done (v0.3.0) |
-| 4 | Banker deliverables (comps → Excel, tearsheet, earnings brief) | in review (v0.4.0, PR open): checks 1, 2, 4 pass; check 3 (open in Excel) is Maxx's |
+| 4 | Banker deliverables (comps → Excel, tearsheet, earnings brief) | in review (v0.4.0, PR open): checks 1, 2, 4 pass; check 3 recalculated in LibreOffice (no Excel installed), Excel itself not yet |
 | 5 | Evals (golden set, numeric + citation graders, CI gate) | not started |
 | 6 | Ship it (API, web UI, Docker, deploy, observability, demo) | not started |
 
@@ -544,9 +544,20 @@ The tearsheet profile fits on page 1 (rendered with `uv run --with pypdfium2` an
 Examples were regenerated after the review fixes (with nothing else running). The MSFT brief's
 risk diff now reports 18 new paragraphs; it was 24, and 6 of those were pieces of 10-K paragraphs.
 
-**3. Open one comps sheet in Excel (Maxx, by hand): NOT DONE YET.** Excel isn't available to
-me, and LibreOffice isn't installed. What *was* verified: the `formulas` package recalculates
-every formula with no `#REF!` or `#DIV/0!`, and the results match `analyst.metrics`.
+**3. Open one comps sheet in Excel: PARTLY MET (recalculated in LibreOffice, not Excel).**
+Excel desktop isn't installed on Maxx's machine (Excel COM: "Class not registered"). At Maxx's
+request the three workbooks were recalculated headless in LibreOffice Calc 7 (a throwaway
+`debian:bookworm-slim` container with `libreoffice-calc-nogui`), and every sheet was exported to CSV:
+```
+comps_MSFT: LibreOffice errors none | 45 multiple/stat cells compared with the Python recalculation, mismatches none
+comps_NVDA: LibreOffice errors none | 42 compared, mismatches none
+comps_JPM:  LibreOffice errors none | 42 compared, mismatches none
+MSFT peer stats (EV/Rev, EV/EBITDA, P/E): median 6.1x / 18.0x / 18.2x; 25th pct 3.8x / 14.0x / 15.5x;
+  75th pct 6.5x / 29.5x / 35.4x; n 7 / 7 / 7
+JPM EV/EBITDA stats: NM (no bank has operating income), n 0
+```
+LibreOffice is an independent engine: no `#NAME?`, `#REF!` or `#DIV/0!`, and the `QUARTILE` rows
+compute. Real Excel is still unchecked (for example, Excel for the web).
 
 **4. README "Part 4" section with screenshot placeholders: PASS**: README.md → "Part 4: Banker
 deliverables". It has an Excel screenshot placeholder for Maxx and the real tearsheet page image.
@@ -610,5 +621,5 @@ full stop ("…25%. [^9]"), and the post-check read them as a new sentence (ever
 - `analyst_exp` is a scratch DB in the same container (450-token chunks with headers, embedded; the ADR 0004 comparison). Keep it for Part 5 or drop it: `docker exec footnote-db-1 dropdb -U analyst analyst_exp`.
 - **Prices:** `data/prices.csv` has closes to 2026-11-23 (Yahoo Finance). Refresh before a demo with `uv run python scripts/fetch_prices.py`; a stale file just means older prices, and each answer cites the price date.
 - The live check costs about $0.14-0.17 per run of the 7 questions (`uv run pytest -m live tests/test_agent_live.py -s`).
-- **Open one comps workbook in Excel** (e.g. `examples/comps_MSFT_2026-11-24.xlsx`). Check the formulas recalculate with no `#REF!` / `#DIV/0!`, and send a screenshot of the Comps sheet for the README placeholder.
+- **Optional: open one comps workbook in real Excel** (Excel for the web works; Excel desktop isn't installed). LibreOffice already recalculated all three with no errors. A screenshot of the Comps sheet would fill the README placeholder.
 - After merging: tag `v0.4.0` on main.
