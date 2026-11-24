@@ -328,27 +328,29 @@ class ToolBox:
         return out
 
     def _register_computed(self, s: Session, c: Computed, ticker: str | None) -> int:
-        return self._register(
-            ComputedCitation(
-                ticker=ticker,
-                metric=c.metric,
-                label=c.label or c.metric,
-                value=_num(c.value),
-                unit=c.unit,
-                formula=c.formula,
-                note=c.note,
-                inputs=[
-                    OperandRef(
-                        label=o.label,
-                        value=_num(o.value) or "",
-                        source=o.source,
-                        detail=o.detail,
-                        fact_ids=list(o.fact_ids),
-                    )
-                    for o in c.inputs
-                ],
-                facts=self._fact_citations(s, c.fact_ids),
-            )
+        return self._register(self.computed_citation(s, c, ticker))
+
+    def computed_citation(self, s: Session, c: Computed, ticker: str | None) -> ComputedCitation:
+        """A computed value's citation (formula, inputs and every fact), not yet registered."""
+        return ComputedCitation(
+            ticker=ticker,
+            metric=c.metric,
+            label=c.label or c.metric,
+            value=_num(c.value),
+            unit=c.unit,
+            formula=c.formula,
+            note=c.note,
+            inputs=[
+                OperandRef(
+                    label=o.label,
+                    value=_num(o.value) or "",
+                    source=o.source,
+                    detail=o.detail,
+                    fact_ids=list(o.fact_ids),
+                )
+                for o in c.inputs
+            ],
+            facts=self._fact_citations(s, c.fact_ids),
         )
 
     # tools ----------------------------------------------------------------------------
@@ -459,21 +461,11 @@ class ToolBox:
         return out
 
     def _present(self, s: Session, c: Computed, ticker: str | None) -> dict[str, Any]:
-        ref = self._register_computed(s, c, ticker)
-        return {
-            "ref": ref,
-            "ticker": ticker,
-            "label": c.label or c.metric,
-            "value": _num(c.value),
-            "display": display(c.value, c.unit),
-            "unit": c.unit,
-            "formula": c.formula,
-            "note": c.note,
-            "inputs": [
-                {"label": o.label, "value": _num(o.value), "display": display(o.value, o.unit)}
-                for o in c.inputs
-            ],
-        }
+        return {"ref": self._register_computed(s, c, ticker), **computed_item(c, ticker)}
+
+    def computed_excerpt(self, s: Session, c: Computed, ticker: str | None) -> Excerpt:
+        """A computed value as source material for `loop.run(context=...)`."""
+        return Excerpt(self.computed_citation(s, c, ticker), computed_item(c, ticker))
 
     def search_filings(self, args: SearchFilingsInput) -> dict[str, Any]:
         with self.session_factory() as s:
@@ -527,6 +519,23 @@ class ToolBox:
             if r.peer_group == row.peer_group and r.ticker != t
         ]
         return {"ticker": t, "peer_group": row.peer_group, "peers": peers}
+
+
+def computed_item(c: Computed, ticker: str | None) -> dict[str, Any]:
+    """What the model sees for a computed value (without its ref)."""
+    return {
+        "ticker": ticker,
+        "label": c.label or c.metric,
+        "value": _num(c.value),
+        "display": display(c.value, c.unit),
+        "unit": c.unit,
+        "formula": c.formula,
+        "note": c.note,
+        "inputs": [
+            {"label": o.label, "value": _num(o.value), "display": display(o.value, o.unit)}
+            for o in c.inputs
+        ],
+    }
 
 
 # -- compute internals ---------------------------------------------------------------------

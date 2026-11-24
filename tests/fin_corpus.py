@@ -92,7 +92,9 @@ def tenk_html(mdna: str) -> str:
 </body></html>"""
 
 
-def seed(session_factory: SessionFactory, raw: Path | None = None) -> dict[str, int]:
+def seed(
+    session_factory: SessionFactory, raw: Path | None = None, q3_html: str | None = None
+) -> dict[str, int]:
     """Insert companies, filings and facts. Returns {label: fact id} for key facts.
     If `raw` is given, the 10-K HTML is also written where the indexer looks for it."""
     ids: dict[str, int] = {}
@@ -177,7 +179,7 @@ def seed(session_factory: SessionFactory, raw: Path | None = None) -> dict[str, 
             zip(quarter_ends, CHIP_Q2025_REVENUE, strict=True), 1
         ):
             acc = f"0000000001-25-00001{n}"
-            filing(1, acc, "10-Q", end + dt.timedelta(days=35))
+            filing(1, acc, "10-Q", end + dt.timedelta(days=35), q3_html if n == 3 else None)
             s.flush()
             fact(1, "Revenues", value, start, end, acc, "10-Q", f"CHIP Revenues FY2025 Q{n}")
 
@@ -260,3 +262,15 @@ def seed_peer(session_factory: SessionFactory) -> None:
                 accession=acc,
             )
         )
+
+
+def tenq_html(mdna: str, risks: str) -> str:
+    """A 10-Q with MD&A (Part I, Item 2) and risk factors (Part II, Item 1A)."""
+    return f"""<html><body><p>FORM 10-Q</p>
+<p>PART I — FINANCIAL INFORMATION</p>
+<p>Item 1. Financial Statements</p><p>{FILLER}</p>
+<p>Item 2. Management's Discussion and Analysis</p><p>{mdna}</p><p>{FILLER}</p>
+<p>PART II — OTHER INFORMATION</p>
+<p>Item 1A. Risk Factors</p>{risks}
+<p>Item 6. Exhibits</p><p>{FILLER}</p>
+</body></html>"""

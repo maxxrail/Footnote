@@ -270,3 +270,15 @@ def test_csv_price_provider_missing_file_and_bad_rows(tmp_path: Path) -> None:
     neg.write_text("ticker,date,close\nAAPL,2026-01-01,-3\n", encoding="utf-8")
     with pytest.raises(ValueError, match="positive"):
         CsvPriceProvider(neg).latest("AAPL")
+
+
+def test_difference() -> None:
+    a = Operand("m now", D("0.31"), (1,), unit="ratio")
+    b = Operand("m before", D("0.29"), (2,), unit="ratio")
+    d = fin.difference(a, b, "margin_change")
+    assert (d.value, d.unit, d.fact_ids) == (D("0.02"), "ratio", (1, 2))
+    assert fin.difference(None, b).note == "missing input"
+    assert fin.difference(None, None).unit == "ratio"
+    usd = fin.difference(op(5, unit="USD"), op(3, unit="USD"))
+    assert (usd.value, usd.unit) == (D(2), "USD")
+    assert fin.difference(op(5, unit="weird"), op(3)).unit == "ratio"

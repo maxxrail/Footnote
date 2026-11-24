@@ -329,3 +329,11 @@ def test_repair_message_quotes_the_sentences_with_problems() -> None:
     r = check(text, OUT, "q", REFS)
     assert r.flagged_sentences == ["The table shows 2.1 vs 2.3 and 31%."]
     assert '"The table shows 2.1 vs 2.3 and 31%."' in r.problems()
+
+
+def test_percentage_points_and_basis_points_match_a_ratio_change() -> None:
+    out = '{"results": [{"ref": 1, "value": "0.012", "display": "1.2%", "unit": "ratio"}]}'
+    for text in ("Margin rose 1.2 pp [^1].", "Margin rose 1.2 percentage points [^1].",
+                 "Margin rose 120 bps [^1].", "Margin rose 120 basis points [^1]."):  # fmt: skip
+        assert check(text, [out], "q", [1]).ok, text
+    assert not check("Margin rose 150 bps [^1].", [out], "q", [1]).ok
