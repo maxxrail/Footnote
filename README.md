@@ -143,12 +143,16 @@ flowchart LR
   peer median/mean/quartiles) comes from `compute`, which calls pure functions in
   `analyst/metrics/` (100% test coverage). Each result is a `Computed(value, formula, inputs)`
   whose inputs name their facts.
-- **Every number is checked.** When the model submits its answer, a post-check pulls every
-  number out of the text and compares it, within the rounding it was written with, to the
-  numbers the tools returned in this run ("$1.5 billion" matches 1,523,000,000; "31%" doesn't
-  match a 25% growth). Each sentence with a number must carry a `[^n]` marker. A failure gets
-  one repair turn. If it still fails, the answer is returned flagged (`unverified_numbers`)
-  and marked low confidence, never passed silently.
+- **Every number is checked against its citation.** When the model submits its answer, a
+  post-check pulls every number out of the text and requires it to match a value of the
+  `[^n]` ref cited in the same sentence: same kind (%, x, amount), same sign when the text
+  states one ("fell 25%" fails against +25%), within the rounding it was written with
+  ("$1.5 billion" matches 1,523,000,000; "$1.6 billion" doesn't). Only typed tool values
+  count (never ids, dates or accession numbers). A failure gets one repair turn inside the
+  10-step limit; if it still fails, the answer comes back flagged (`unverified_numbers`,
+  `miscited_numbers`, `uncited_numbers`) at low confidence, never passed silently.
+  Limits: claims without numbers are not checked for a citation, and small counts before a
+  count word ("3 years") are treated as labels ([ADR 0005](docs/adr/0005-agent-loop-and-number-postcheck.md)).
 - **Refuse rather than guess.** Companies outside `data/universe.csv` and line items a
   company doesn't report come back from the tools as "not in the filings"; a P/E with
   negative earnings is `None` with a note.
@@ -163,7 +167,7 @@ flowchart LR
 uv run python -m analyst.agent.ask "How did NVIDIA's operating margin trend over the last three fiscal years?"
 uv run python -m analyst.agent.ask "..." --json         # full Answer: citations, trace, usage
 uv run pytest -m live tests/test_agent_live.py -s       # the 5 sample questions + refusals (costs ~$)
-uv run python scripts/mutation_check_part3.py           # 27 guarantees, each broken once
+uv run python scripts/mutation_check_part3.py           # 40 guarantees, each broken once
 ```
 
 ## Quick start (fills in as parts land)

@@ -22,11 +22,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   item has a run-wide `ref` mapped to a `FactCitation`, `ComputedCitation` or filing `Citation`.
 - `analyst/agent/loop.py`: hand-written tool-use loop (max 10 steps, parallel tool calls in
   one result message, trace of every call with ms, tokens and cost) returning `Answer`.
-- `analyst/agent/postcheck.py`: number post-check (matches within written rounding, % of a
-  ratio, scale words; every number cited; unknown refs flagged) with one repair turn (ADR 0005).
+- `analyst/agent/postcheck.py`: number post-check against the cited ref's typed values
+  (unit kind, sign, written rounding, scale words; uncited, miscited and unknown refs flagged;
+  a non-refused answer must cite something) with one repair turn (ADR 0005).
 - `python -m analyst.agent.ask "..."` CLI; `docs/sample_questions.md`; live test
   `tests/test_agent_live.py` (`-m live`).
-- `scripts/mutation_check_part3.py`: 27 guarantees, each broken on purpose and caught.
+- `scripts/mutation_check_part3.py`: 40 guarantees, each broken on purpose and caught.
 
 ### Changed
 - Tests marked `live` skip the no-network and no-default-DB guards (they use the real API
