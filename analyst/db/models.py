@@ -149,5 +149,9 @@ class Chunk(Base):
 
     @property
     def indexed_text(self) -> str:
-        """What the embedder and reranker read: header, blank line, chunk text."""
-        return f"{self.context}\n\n{self.text}" if self.context else self.text
+        return indexed_text(self.context, self.text)
+
+
+def indexed_text(context: str, text: str) -> str:
+    """What the embedder and reranker read: header, blank line, chunk text."""
+    return f"{context}\n\n{text}" if context else text

@@ -17,7 +17,7 @@ from typing import Any, Protocol
 from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
-from analyst.db.models import EMBEDDING_DIM, Chunk
+from analyst.db.models import EMBEDDING_DIM, Chunk, indexed_text
 
 DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"
 # BGE v1.5 recommends this instruction on short queries (not on passages).
@@ -114,9 +114,14 @@ def embed_pending(
     for i in range(0, len(ids), batch_size):
         batch = ids[i : i + batch_size]
         # header + text: chunk text says "we", the header names the company and section
+        # (columns, not ORM objects: the session would keep every loaded chunk in memory)
         rows = [
-            (c.id, c.indexed_text)
-            for c in session.scalars(select(Chunk).where(Chunk.id.in_(batch)).order_by(Chunk.id))
+            (cid, indexed_text(context, text))
+            for cid, context, text in session.execute(
+                select(Chunk.id, Chunk.context, Chunk.text)
+                .where(Chunk.id.in_(batch))
+                .order_by(Chunk.id)
+            )
         ]
         vecs = embedder.embed_documents([t for _, t in rows])
         session.execute(

@@ -229,8 +229,8 @@ MUTS = [
     (
         "chunk header embedded (text only)",
         EMBED,
-        "(c.id, c.indexed_text)",
-        "(c.id, c.text)",
+        "(cid, indexed_text(context, text))",
+        "(cid, text)",
         [T_S + "test_company_name_found_through_the_chunk_header"],
     ),
     # -- index / embed / citations --------------------------------------------------------
