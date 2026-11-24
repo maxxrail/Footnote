@@ -1,18 +1,12 @@
 name: Evals
 
-# The eval suite calls the real model, so it costs money (capped by --budget).
-# It runs only when something that changes the agent's behaviour changes, or the
-# evals themselves do. Everything else is covered by the free CI workflow.
+# The real-model eval suite. It calls the model, so it costs money (capped by --budget),
+# and it runs only when started by hand (Actions > Evals > Run workflow). Every PR is
+# gated for free instead by the replayed smoke eval in ci.yml.
 # Needs the ANTHROPIC_API_KEY secret (Settings > Secrets and variables > Actions).
+# It runs on the committed seed corpus (AAPL, MSFT, NVDA, JPM); items about other
+# companies are skipped and listed in the summary.
 on:
-  pull_request:
-    paths:
-      - "analyst/agent/**"
-      - "analyst/retrieval/**"
-      - "analyst/metrics/**"
-      - "analyst/evals/**"
-      - "analyst/config.py"
-      - ".github/workflows/evals.yml"
   workflow_dispatch:
     inputs:
       model:

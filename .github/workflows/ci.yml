@@ -67,6 +67,18 @@ jobs:
       - name: pytest (no network, no LLM; live tests are skipped)
         run: uv run pytest -rs
 
+      - name: Load the eval seed corpus (committed fixtures, no SEC calls)
+        run: uv run python -m analyst.evals.seed --embedder hash
+
+      - name: Smoke eval (20 items, replayed model responses, no key; gated on the baseline)
+        run: >-
+          uv run python -m analyst.evals.run --dataset smoke --concurrency 1
+          --replay evals/recordings/smoke.json --gate --markdown smoke-summary.md
+
+      - name: Smoke eval scores in the job summary
+        if: always()
+        run: '[ -f smoke-summary.md ] && cat smoke-summary.md >> "$GITHUB_STEP_SUMMARY" || true'
+
   security:
     name: Dependency audit and secret scan
     runs-on: ubuntu-latest

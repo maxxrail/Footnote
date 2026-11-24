@@ -25,7 +25,8 @@ Each item is asked with a fresh toolbox, graded, then reported:
 - `vector-only` uses only the vector leg of retrieval.
 
 **Gate:** `--gate [FILE]` compares the summary with the thresholds stored for this dataset
-in `evals/baseline/thresholds.json` and exits 1 if any metric is below its threshold.
+and corpus (`smoke@seed`, `all@full`, ...) in `evals/baseline/thresholds.json` and exits
+1 if any metric is below its threshold.
 """
 
 from __future__ import annotations
@@ -64,6 +65,7 @@ from analyst.evals.replay import (
     ReplayJudge,
     ReplayLLM,
 )
+from analyst.evals.seed import TICKERS as SEED_TICKERS
 from analyst.llm.client import LLMClient, cost_usd
 from analyst.metrics.prices import CsvPriceProvider
 from analyst.retrieval.embed import Embedder, HashEmbedder
@@ -112,6 +114,7 @@ class Config:
     ids: list[str] = field(default_factory=list)
     record: Path | None = None
     replay: Path | None = None
+    corpus: str = ""  # set by run_items: "seed" (the 4-company CI corpus) or "full"
 
 
 # -- running --------------------------------------------------------------------------------
@@ -253,6 +256,7 @@ def run_items(
     with session_factory() as s:
         loaded = set(s.scalars(select(Company.ticker)))
         has_chunks = bool(s.scalar(select(func.count()).select_from(Chunk)))
+    cfg.corpus = "seed" if loaded <= set(SEED_TICKERS) else "full"
     embedder = corpus_embedder(session_factory) if has_chunks else HashEmbedder()
     prices = CsvPriceProvider(settings.prices_csv)
     recording = Recording.load(cfg.replay) if cfg.replay else None
@@ -373,6 +377,7 @@ def summarize(results: Sequence[ItemResult], cfg: Config) -> dict[str, Any]:
         "datasets": cfg.datasets,
         "dataset_version": DATASET_VERSION,
         "ablation": cfg.ablation,
+        "corpus": cfg.corpus,
         "model": cfg.model or get_settings().anthropic_model,
         "items": len(results),
         "graded": len(graded),
@@ -404,7 +409,8 @@ def summarize(results: Sequence[ItemResult], cfg: Config) -> dict[str, Any]:
 def markdown(summary: dict[str, Any], results: Sequence[ItemResult], max_failures: int = 40) -> str:
     s = summary
     lines = [
-        f"# Eval summary: {', '.join(s['datasets'])} (dataset {s['dataset_version']}, "
+        f"# Eval summary: {', '.join(s['datasets'])} on the {s['corpus']} corpus "
+        f"(dataset {s['dataset_version']}, "
         f"ablation {s['ablation']}, model {s['model']})",
         "",
         f"{s['graded']} graded, {s['skipped']} skipped, {s['errors']} errors, "
@@ -571,7 +577,7 @@ def main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - CLI
     safe_print(md.split("\nNumeric accuracy by template")[0])
     safe_print(f"results: {run_dir}")
     if args.gate:
-        below = gate(summary, ",".join(datasets), args.gate)
+        below = gate(summary, f"{','.join(datasets)}@{cfg.corpus}", args.gate)
         if below:
             safe_print("GATE FAILED: " + "; ".join(below))
             return 1
