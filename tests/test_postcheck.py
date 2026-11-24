@@ -345,3 +345,18 @@ def test_markers_after_the_full_stop_belong_to_that_sentence() -> None:
     # but a marker in the next sentence still doesn't cover an earlier number
     r = check("Revenue was $1.5 billion. Growth was 25% [^2].", OUT, "q", REFS)
     assert r.uncited_numbers == ["$1.5 billion"]
+
+
+def test_abbreviations_do_not_end_a_sentence() -> None:
+    from analyst.agent.postcheck import SENTENCE
+
+    parts = SENTENCE.split(
+        "In 2025 the U.S. government said so [^1]. Apple Inc. sells phones. J. Doe ran it."
+    )
+    assert parts == [
+        "In 2025 the U.S. government said so [^1].",
+        "Apple Inc. sells phones.",
+        "J. Doe ran it.",
+    ]
+    # so a number after "U.S." is still in the sentence its marker covers
+    assert ok("Sales in the U.S. rose 25% [^2].")

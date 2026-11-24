@@ -42,7 +42,7 @@ from analyst.metrics.quarters import DerivedPoint, quarterly_series
 from analyst.metrics.stats import peer_stat
 from analyst.retrieval.citation import Citation
 from analyst.retrieval.embed import Embedder
-from analyst.retrieval.search import search
+from analyst.retrieval.search import Mode, search
 
 SessionFactory = Callable[[], AbstractContextManager[Session]]
 EXCERPT_CHARS = 1500
@@ -211,10 +211,13 @@ TOOL_DOCS: dict[str, tuple[str, type[_Input]]] = {
 }
 
 
-def tool_definitions() -> list[dict[str, Any]]:
-    """Anthropic tool definitions, in a fixed order (keeps the prompt cache stable)."""
+def tool_definitions(exclude: frozenset[str] = frozenset()) -> list[dict[str, Any]]:
+    """Anthropic tool definitions, in a fixed order (keeps the prompt cache stable).
+    `exclude` drops tools (the eval ablations run without `search_filings`)."""
     out = []
     for name, (desc, model) in TOOL_DOCS.items():
+        if name in exclude:
+            continue
         schema = model.model_json_schema()
         schema.pop("title", None)
         out.append({"name": name, "description": desc, "input_schema": schema})
@@ -249,6 +252,14 @@ class ToolBox:
     universe_path: Path
     embedder: Embedder | None = None
     refs: dict[int, AnyCitation] = field(default_factory=dict)
+    # Eval ablations: no filing search at all, or one retrieval leg only.
+    search_enabled: bool = True
+    search_mode: Mode = "hybrid"
+
+    def definitions(self) -> list[dict[str, Any]]:
+        return tool_definitions(
+            frozenset() if self.search_enabled else frozenset({"search_filings"})
+        )
 
     # registry -------------------------------------------------------------------------
     def _register(self, citation: AnyCitation) -> int:
@@ -271,7 +282,7 @@ class ToolBox:
             "search_filings": self.search_filings,
             "list_peers": self.list_peers,
         }
-        if name not in handlers:
+        if name not in handlers or (name == "search_filings" and not self.search_enabled):
             raise ToolError(f"unknown tool {name!r}")
         try:
             args = TOOL_DOCS[name][1].model_validate(raw_input)
@@ -481,6 +492,7 @@ class ToolBox:
                 session=s,
                 embedder=self.embedder,
                 rerank=False,
+                mode=self.search_mode,
             )
             texts = {
                 c.id: c.text

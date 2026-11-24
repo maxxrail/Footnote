@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from analyst.agent import postcheck
 from analyst.agent.citations import AnyCitation
-from analyst.agent.tools import Excerpt, SubmitAnswerInput, ToolBox, ToolError, tool_definitions
+from analyst.agent.tools import Excerpt, SubmitAnswerInput, ToolBox, ToolError
 from analyst.llm.client import LLMClient, Usage
 
 MAX_STEPS = 10
@@ -109,12 +109,13 @@ def run(
     max_steps: int = MAX_STEPS,
     system: str = SYSTEM_PROMPT,
     context: Sequence[Excerpt] = (),
+    check_numbers: bool = True,
 ) -> Answer:
     """Answer `question`. `context` is source material given up front (a workflow's
     filing excerpts or computed values); it gets refs and is cited like tool output."""
     started = time.perf_counter()
     toolbox.refs.clear()  # refs are per run; a reused toolbox must not carry old ones
-    tools = tool_definitions()
+    tools = toolbox.definitions()
     trace = Trace()
     usage = Usage()
     outputs: list[str] = []  # every tool output, for the post-check
@@ -156,6 +157,8 @@ def run(
         )
 
     def review(sub: SubmitAnswerInput) -> postcheck.CheckResult:
+        if not check_numbers:  # eval ablation: accept the first answer as given
+            return postcheck.CheckResult()
         return postcheck.check(sub.text, outputs, question, toolbox.refs, sub.refused)
 
     step = 0

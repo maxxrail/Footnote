@@ -22,7 +22,6 @@ against the agent's own tool output:
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -33,13 +32,14 @@ from sqlalchemy.orm import Session
 
 from analyst.agent.citations import AnyCitation, ComputedCitation, FactCitation
 from analyst.agent.loop import Answer
-from analyst.agent.postcheck import MARKER, Num, extract
+from analyst.agent.postcheck import MARKER, SENTENCE, Num, extract
 from analyst.db.models import Fact
 from analyst.evals.datasets import Item
 from analyst.retrieval.citation import Citation, resolve, verify
 
 REL_TOL = Decimal("0.005")
-SPLIT = re.compile(r"(?<=[.!?;])[ \t]+(?!\[\^)|\n+")
+PASSAGE_CHARS = 3000  # of each cited passage, shown to the judge
+SPLIT = SENTENCE  # the post-check's splitter: answers are graded sentence by sentence
 
 
 @dataclass
@@ -227,7 +227,9 @@ def judge_prompt(s: Session, item: Item, answer: Answer) -> str:
         lines.append(f"[{i}] {sent}")
         for r in refs:
             if 0 < r <= len(answer.citations):
-                lines.append(f"    cites [^{r}]: {_source_text(s, answer.citations[r - 1])[:1200]}")
+                lines.append(
+                    f"    cites [^{r}]: {_source_text(s, answer.citations[r - 1])[:PASSAGE_CHARS]}"
+                )
     return "\n".join(lines)
 
 
