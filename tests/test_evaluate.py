@@ -18,7 +18,8 @@ VALID_SECTIONS = {section_code(None, i) for i in ITEMS_10K} | {
 
 
 @pytest.mark.parametrize(
-    ("name", "size"), [("retrieval_gold.yaml", 15), ("retrieval_holdout.yaml", 10)]
+    ("name", "size"),
+    [("retrieval_gold.yaml", 15), ("retrieval_holdout.yaml", 10), ("retrieval_holdout2.yaml", 10)],
 )
 def test_gold_set_is_well_formed(name: str, size: int) -> None:
     gold = load_gold(FIXTURES / name)
