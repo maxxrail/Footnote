@@ -92,8 +92,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("-k", type=int, default=5)
     ap.add_argument("--rerank", action="store_true", help="also run hybrid + rerank")
     ap.add_argument("--misses", action="store_true")
+    ap.add_argument("--gold", type=Path, default=GOLD, help="query set (default: the gold set)")
     args = ap.parse_args(argv)
-    gold = load_gold()
+    gold = load_gold(args.gold)
     configs: list[tuple[str, Mode, bool]] = [
         ("vector-only", "vector", False),
         ("full-text-only", "text", False),

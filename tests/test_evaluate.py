@@ -5,6 +5,8 @@ from __future__ import annotations
 import csv
 import datetime as dt
 
+import pytest
+
 from analyst.retrieval.citation import Citation
 from analyst.retrieval.evaluate import GOLD, GoldQuery, is_hit, load_gold, recall_at_k
 from analyst.retrieval.parse import ITEMS_10K, ITEMS_10Q, section_code
@@ -15,11 +17,14 @@ VALID_SECTIONS = {section_code(None, i) for i in ITEMS_10K} | {
 }
 
 
-def test_gold_set_is_well_formed() -> None:
-    gold = load_gold(GOLD)
+@pytest.mark.parametrize(
+    ("name", "size"), [("retrieval_gold.yaml", 15), ("retrieval_holdout.yaml", 10)]
+)
+def test_gold_set_is_well_formed(name: str, size: int) -> None:
+    gold = load_gold(FIXTURES / name)
     assert GOLD == FIXTURES / "retrieval_gold.yaml"
-    assert len(gold) == 15
-    assert len({g.id for g in gold}) == 15
+    assert len(gold) == size
+    assert len({g.id for g in gold}) == size
     universe = FIXTURES.parent.parent / "data" / "universe.csv"
     with universe.open(encoding="utf-8") as fh:
         tickers = {row["ticker"] for row in csv.DictReader(fh)}
