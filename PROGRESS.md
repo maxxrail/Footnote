@@ -1,13 +1,13 @@
 # Progress
 
-**Current part:** 3 (in review, v0.3.0, PR open). Next: 4
+**Current part:** 4 (in progress). Next: 5
 
 | Part | Name | Status |
 |------|------|--------|
 | 1 | Financial data layer (SEC EDGAR + XBRL) | done (v0.1.0) |
 | 2 | Filing search with citations (hybrid retrieval) | done (v0.2.0); check 3 waived by Maxx: hybrid 14/15 vs vector 15/15 on gold, tied 20/20 on held-out |
-| 3 | The analyst agent (tools, deterministic math, cited answers) | in review (v0.3.0, PR open): 4 of 4 checks pass |
-| 4 | Banker deliverables (comps → Excel, tearsheet, earnings brief) | not started |
+| 3 | The analyst agent (tools, deterministic math, cited answers) | done (v0.3.0) |
+| 4 | Banker deliverables (comps → Excel, tearsheet, earnings brief) | in progress |
 | 5 | Evals (golden set, numeric + citation graders, CI gate) | not started |
 | 6 | Ship it (API, web UI, Docker, deploy, observability, demo) | not started |
 
@@ -488,4 +488,4 @@ happened in `python -m analyst.agent.ask`. Fixed with `safe_print`, and tested.
 - `analyst_exp` is a scratch DB in the same container (450-token chunks with headers, embedded; the ADR 0004 comparison). Keep it for Part 5 or drop it: `docker exec footnote-db-1 dropdb -U analyst analyst_exp`.
 - **Prices:** `data/prices.csv` has closes to 2026-11-23 (Yahoo Finance). Refresh before a demo with `uv run python scripts/fetch_prices.py`; a stale file just means older prices, and each answer cites the price date.
 - The live check costs about $0.14-0.17 per run of the 7 questions (`uv run pytest -m live tests/test_agent_live.py -s`).
-- After merging: tag `v0.3.0` on main.
+- After merging: tag `v0.4.0` on main.
