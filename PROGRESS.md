@@ -1,11 +1,11 @@
 # Progress
 
-**Current part:** 1 (done, in review). Next: 2
+**Current part:** 2 (done, in review). Next: 3
 
 | Part | Name | Status |
 |------|------|--------|
-| 1 | Financial data layer (SEC EDGAR + XBRL) | done (v0.1.0, PR open) |
-| 2 | Filing search with citations (hybrid retrieval) | not started |
+| 1 | Financial data layer (SEC EDGAR + XBRL) | done (v0.1.0) |
+| 2 | Filing search with citations (hybrid retrieval) | done (v0.2.0, PR open) |
 | 3 | The analyst agent (tools, deterministic math, cited answers) | not started |
 | 4 | Banker deliverables (comps → Excel, tearsheet, earnings brief) | not started |
 | 5 | Evals (golden set, numeric + citation graders, CI gate) | not started |
@@ -35,6 +35,17 @@
 - P1: XBRL values are parsed as `Decimal` (`json.loads(parse_float=Decimal)`), never float.
 - P1: DB tests run in a throwaway Postgres schema per session. They skip locally if Postgres is down and fail in CI (`CI` env var).
 - P1: Fixtures (`tests/fixtures/`, ~900 KB) are AAPL + MSFT, trimmed to canonical concepts since 2016. Re-record with `uv run python scripts/record_fixtures.py`.
+- P2: ADR 0003: section detection = weighted heading chain (skips TOC rows and end-of-document cross-reference indexes) + bare-title fallback for key items that are pointers ("see pages 50-160").
+- P2: ADR 0004: hybrid retrieval and chunk size (see the recall table below).
+- P2: Text before the first heading is labelled `Cover` and indexed too (it has the company description in some 10-Qs). Filter it out with `sections=`.
+- P2: Added a `filing_sections` table (not in the spec) so section spans are stored once per filing and the chunker's labels can be checked against them.
+- P2: The "BM25" leg is Postgres full-text search, not true BM25: query lexemes OR-ed, each term scored `ts_rank × BM25 IDF` (`log(1+(N-df+0.5)/(df+0.5))`) and summed. Plain `ts_rank` with AND matched almost nothing for natural-language queries.
+- P2: The token count is a regex estimate (`\w+|[^\w\s]`); real BGE WordPiece tokens are 1.08× that (p10 1.04, p90 1.13). So an "800-token" chunk is ~860 model tokens, and bge-small truncates at 512, which is why ADR 0004 compares 450-token chunks.
+- P2: `sentence-transformers`/torch are in an optional `ml` extra (`uv sync --extra dev --extra ml`). Tests use a deterministic `HashEmbedder` and a fake reranker, so CI doesn't download models.
+- P2: Rerank is off by default (`RERANK=false` in settings, `--rerank` on the CLI).
+- P2: pgvector `hnsw.iterative_scan = strict_order` so filtered vector queries still return 50 candidates.
+- P2: Test DB isolation fix: tests create their tables with `checkfirst=False` in the throwaway schema and assert every table resolves there before truncating (see Notes for Maxx: incident).
+- P2: WFC and USB keep Risk Factors and MD&A in Exhibit 13, which isn't downloaded. Their Item 1A/7 are detected but short. Left as-is (ADR 0003 says how to fix).
 
 ## Acceptance results
 <!-- Claude Code: paste the output of each part's acceptance checks here when done. -->
@@ -135,6 +146,91 @@ revenue, net income, EPS, assets, cash and operating cash flow. The gaps are rea
 source data: banks don't report gross profit, operating income or (some) capex; ADI/ADSK/AMD/INTC/ORCL
 don't tag `Liabilities`; C/PNC/TXN/WDAY have no FY-end `CommonStockSharesOutstanding`.
 
+### Part 2 (2026-11-23)
+
+**1. All Part 1 filings parsed; ≥ 95% of 10-Ks have Item 1A and Item 7 detected: PASS (100%)**
+```
+$ uv run python -m analyst.retrieval.index
+# first run: 175/175 filings parsed, 20,456 chunks written (~70 s); embedding was killed at 13,632 (low memory)
+# resumed run:
+filings: 175 on disk, 0 parsed | chunks written: 0 | chunks embedded: 6824
+$ psql -c "select count(embedding), count(*) from chunks"   ->   20456 | 20456
+$ uv run python scripts/section_survey.py
+10-K: 75 filings | risk factors + MD&A detected: 75/75 (100.0%) | both >= 2000 chars: 69/75 (92.0%) | avg 495,655 chars
+10-Q: 100 filings | risk factors + MD&A detected: 87/100 (87.0%) | both >= 2000 chars: 61/100 (61.0%) | avg 273,457 chars
+```
+The 6 short 10-Ks are WFC × 3 and USB × 3 (Risk Factors ~250 chars, MD&A ~300 chars): their
+10-K points to Exhibit 13, which is not downloaded. Most short 10-Q Part II Item 1A sections say
+"no material changes" (e.g. TXN, 182 chars). Details and the earlier approach's numbers: ADR 0003.
+
+**2. `pytest`, `ruff` clean: PASS**
+```
+136 passed in 25.55s
+All checks passed!
+57 files already formatted
+Success: no issues found in 38 source files   (mypy)
+No new upgrade operations detected.            (alembic check)
+```
+
+**3. Retrieval eval, recall@5 on 15 gold queries: hybrid ≥ both only with the ticker filter. NOT met on the open set**
+```
+$ uv run python -m analyst.retrieval.evaluate --rerank --misses
+| Retriever | open (no filter) | ticker-filtered | s/query (open) |
+|---|---|---|---|
+| vector-only | 0.93 (14/15) | 0.93 (14/15) | 1.54 |
+| full-text-only | 0.87 (13/15) | 0.93 (14/15) | 0.13 |
+| hybrid (RRF) | 0.87 (13/15) | 0.93 (14/15) | 0.18 |
+| hybrid + rerank | 1.00 (15/15) | 1.00 (15/15) | 9.48 |
+
+vector-only: open missed ['orcl-capex']; filtered missed ['orcl-capex']
+full-text-only: open missed ['orcl-capex', 'qcom-apple-modem']; filtered missed ['orcl-capex']
+hybrid (RRF): open missed ['orcl-capex', 'txn-300mm']; filtered missed ['orcl-capex']
+hybrid + rerank: open missed []; filtered missed []
+```
+"full-text-only" is the spec's "BM25-only" leg: Postgres full-text with OR-ed terms and BM25 IDF
+weights, not true BM25 (ADR 0004). On the open set hybrid loses `txn-300mm` (rank 8). Both legs
+rank a TXN chunk first, but different ones, and Micron's near-duplicate passages from 7 filings
+appear in both lists and win the fusion. I did not tune RRF or the gold set to close the gap;
+ADR 0004 has the per-query ranks and the follow-ups (dedupe near-duplicates; rerank in Part 5).
+
+**4. README "Part 2" section: PASS**: README.md → "Part 2: Filing search with citations".
+
+**Mutation checks** (`uv run python scripts/mutation_check_part2.py`): **30/30** caught.
+```
+CAUGHT | TOC lines skipped (keep page-numbered lines) | 1 failed, 1 passed
+CAUGHT | last real heading wins (no weight for real sections) | 1 failed, 2 passed
+CAUGHT | ties go to later headings (prefer earlier) | 1 failed, 3 passed
+CAUGHT | prose mentions are not headings (accept any 'Item N') | 1 failed
+CAUGHT | title fallback for pointer items (off) | 1 failed
+CAUGHT | financial statements start at first auditor report (take last) | 1 failed
+CAUGHT | running headers/footers removed (never) | 2 failed
+CAUGHT | ix:header dropped (keep it) | 1 failed
+CAUGHT | display:none dropped (keep it) | 1 failed
+CAUGHT | tables as pipe rows (join cells with a space) | 1 failed
+CAUGHT | chunks never cross sections (run 500 chars past the end) | 1 failed
+CAUGHT | spans round-trip (text one char longer) | 1 failed
+CAUGHT | chunk size cap (2x) | 1 failed
+CAUGHT | chunks overlap (no overlap) | 1 failed
+CAUGHT | RRF formula (rank from 0) | 1 failed
+CAUGHT | RRF counts a duplicate once (count every time) | 1 failed
+CAUGHT | cik filter (ignored) | 3 failed
+CAUGHT | form filter (ignored) | 3 failed
+CAUGHT | section filter (ignored) | 3 failed
+CAUGHT | since filter (ignored) | 3 failed
+CAUGHT | full-text OR-s query terms (AND) | 1 failed
+CAUGHT | full-text IDF weighting (none) | 1 failed, 1 passed
+CAUGHT | rerank off by default (always on) | 1 failed
+CAUGHT | idempotent index (always reparse) | 1 failed
+CAUGHT | reparse on changed HTML (never) | 1 failed
+CAUGHT | only embed pending chunks (re-embed all) | 1 failed
+CAUGHT | resolve returns the exact span (off by one) | 1 failed
+CAUGHT | verify checks the text (always true) | 1 failed
+CAUGHT | resolve rejects spans past the end (accept) | 1 failed
+CAUGHT | tests never touch the real tables (checkfirst=True) | 1 error
+```
+The first full run missed 3 (TOC filter, tie-to-later, IDF). Each now has a test that targets it:
+the end-of-document cross-reference index, equal-weight chains, and 8 "company" chunks vs one rare-term chunk.
+
 ## Notes for Maxx
 <!-- Anything the user has to do by hand (keys, Docker, accounts). -->
 - `.env` holds your `SEC_USER_AGENT` (you created it). It is gitignored.
@@ -142,3 +238,9 @@ don't tag `Liabilities`; C/PNC/TXN/WDAY have no FY-end `CommonStockSharesOutstan
 - `data/raw/` (918 MB, gitignored) is the SEC cache. Deleting it means the next ingest re-downloads (~6 min).
 - To pull new filings later: `uv run python -m analyst.edgar.ingest --universe data/universe.csv --refresh`.
 - After merging: tag `v0.1.0` on main.
+- **P2 incident (fixed):** during Part 2 a test-setup change made `create_all(checkfirst=True)` see the real `public` tables through the search path, so the test fixture's TRUNCATE emptied your dev DB's `companies`, `filings` and `facts`. I rebuilt them from `data/raw/` with 0 SEC requests (`companies=25 filings=230954 facts=823354`, the same as Part 1's rebuild) and deleted only the synthetic test rows afterwards. Tests now always create their own tables and refuse to truncate unless every table resolves to the test schema (mutation-checked).
+- Real embeddings need `uv sync --extra dev --extra ml` (CPU torch, ~1 GB). The first run downloads the models to `~/.cache/huggingface`. Full index: ~70 s to parse, ~30 min to embed.
+- The embedding run was killed once by Claude Code for low memory (13,632/20,456). Re-running `python -m analyst.retrieval.index` picks up where it stopped.
+- Add `RERANK=false` to `.env.example` (I'm not allowed to read that file).
+- `analyst_exp` is a scratch DB in the same container (450-token chunks, not embedded). Use it for the chunk-size experiment in ADR 0004, or drop it: `docker exec footnote-db-1 dropdb -U analyst analyst_exp`.
+- After merging: tag `v0.2.0` on main.

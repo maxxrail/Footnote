@@ -5,6 +5,32 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-23: Part 2, filing search with citations
+
+### Added
+- `analyst/retrieval/parse.py`: filing HTML → clean text (inline XBRL header, hidden blocks,
+  running headers/footers and page numbers dropped; tables as `cell | cell` rows) and
+  10-K Item / 10-Q Part+Item detection that skips the table of contents (ADR 0003).
+- `analyst/retrieval/chunk.py`: ~800-token chunks with ~100-token overlap that never cross a
+  section; every chunk keeps its exact `char_start:char_end` span.
+- DB: `filing_texts`, `filing_sections`, `chunks` (pgvector `vector(384)` with HNSW, generated
+  `tsvector` with GIN). Migration `183713853069`.
+- `analyst/retrieval/embed.py`: `Embedder` protocol, local `BAAI/bge-small-en-v1.5` default
+  (install with `uv sync --extra ml`), embeds only pending chunks.
+- `python -m analyst.retrieval.index`: idempotent indexer (re-parses only when the HTML or
+  `PARSER_VERSION` changes).
+- `analyst/retrieval/search.py`: `search(query, cik, forms, sections, since, k)`, vector top-50 +
+  Postgres full-text top-50 fused with RRF (k=60), optional `BAAI/bge-reranker-base` rerank
+  (`RERANK=true` or `--rerank`). Returns `Citation`s; `resolve()` / `verify()` read the exact span.
+- `python -m analyst.retrieval.cli "supply chain risk" --ticker NVDA`.
+- `tests/fixtures/retrieval_gold.yaml` (15 queries) and `python -m analyst.retrieval.evaluate`
+  (recall@k per retriever).
+- `scripts/section_survey.py`, `scripts/mutation_check_part2.py` (30 mutations), ADRs 0003-0004.
+
+### Fixed
+- Test DB isolation: test tables are always created in the throwaway schema, and the fixture
+  refuses to truncate if any table resolves to `public`.
+
 ## [0.1.0] - 2026-11-23: Part 1, financial data layer
 
 ### Added

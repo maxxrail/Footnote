@@ -6,7 +6,7 @@ specific SEC filing passage or XBRL fact. It also runs banker workflows end to e
 comps to a formula-driven Excel sheet, one-page tearsheets, and earnings briefs. A real eval
 harness measures how accurate it is.
 
-> Status: Part 1 of 6 done (v0.1.0, data layer). See [PROGRESS.md](PROGRESS.md).
+> Status: Part 2 of 6 done (v0.2.0, data layer + filing search). See [PROGRESS.md](PROGRESS.md).
 
 ## What's inside (built in 6 parts)
 1. **Data layer**: SEC EDGAR + XBRL ingestion into Postgres, normalized and traceable
@@ -56,6 +56,50 @@ uv run pytest -rs                      # offline: recorded fixtures, no network
 Re-fetch new filings with `--refresh`. Design notes: [ADR 0001](docs/adr/0001-idempotent-cached-ingest.md)
 (caching and idempotency) and [ADR 0002](docs/adr/0002-per-period-concept-fallback.md)
 (concept fallback).
+
+## Part 2: Filing search with citations
+
+Searches the text of the downloaded 10-Ks and 10-Qs and returns passages as citations:
+accession, form, filing date, company, section, an exact character span into the stored
+filing text, a snippet and the sec.gov URL. `resolve(citation)` returns exactly the cited
+text, so every quote the agent makes later can be checked.
+
+- **Parser** (`analyst/retrieval/parse.py`): HTML → clean text (inline XBRL header, hidden
+  blocks, running headers/footers and page numbers dropped; tables kept as `a | b | c` rows).
+  It labels each 10-K Item and 10-Q Part/Item, skipping the table of contents and the
+  cross-reference indexes some filers put at the end ([ADR 0003](docs/adr/0003-section-detection.md)).
+  Item 1A and Item 7 are found in **75/75** 10-Ks.
+- **Chunker** (`chunk.py`): ~800-token chunks, ~100-token overlap, never across a section.
+- **Index**: `filing_texts` (the clean text, stored once), `filing_sections`, and `chunks`
+  with a pgvector HNSW index and a Postgres full-text GIN index. Embeddings come from
+  `BAAI/bge-small-en-v1.5`, run locally on CPU (free).
+- **Search** (`search.py`): vector top-50 + full-text top-50, fused with Reciprocal Rank
+  Fusion, optional cross-encoder rerank, filters on company, form, section and date.
+
+Retrieval eval, recall@5 on 15 hand-written queries (`tests/fixtures/retrieval_gold.yaml`;
+a hit = right company and right section in the top 5):
+
+| Retriever | open (all 25 companies) | ticker-filtered | s/query (CPU) |
+|---|---|---|---|
+| vector-only (bge-small) | 0.93 | 0.93 | 1.54 |
+| full-text-only (Postgres FTS + IDF, "BM25" leg) | 0.87 | 0.93 | 0.13 |
+| hybrid (RRF) | 0.87 | 0.93 | 0.18 |
+| hybrid + cross-encoder rerank | **1.00** | **1.00** | 9.48 |
+
+Hybrid ties the best single leg when filtered by ticker, which is how the agent will search.
+On the open set it loses one query to near-duplicate passages repeated across a company's
+filings. Rerank fixes that but is slow on CPU, so it is off by default. Details:
+[ADR 0004](docs/adr/0004-hybrid-retrieval.md).
+
+```powershell
+uv sync --extra dev --extra ml          # ml = sentence-transformers + torch (CPU)
+uv run alembic upgrade head
+uv run python -m analyst.retrieval.index              # parse + chunk + embed (~30 min on CPU)
+uv run python -m analyst.retrieval.cli "supply chain risk" --ticker NVDA
+uv run python -m analyst.retrieval.cli "goodwill impairment" --section "Item 7" --form 10-K -k 5
+uv run python -m analyst.retrieval.evaluate --misses  # recall@5 on the 15-query gold set
+uv run python scripts/section_survey.py               # section-detection stats
+```
 
 ## Quick start (fills in as parts land)
 ```powershell
