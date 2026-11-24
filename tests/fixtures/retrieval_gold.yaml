@@ -1,0 +1,84 @@
+# Retrieval gold set (Part 2): query -> the (ticker, section) a good answer cites.
+#
+# Written before running any search, from what these companies' 10-K/10-Q sections are
+# known to discuss, so the set is not tuned to the system. A query is a hit at k if any
+# of the top-k results has the ticker and one of the listed sections. Sections list the
+# 10-K item and its 10-Q counterpart where both would be right.
+#
+# Run: uv run python -m analyst.retrieval.evaluate
+
+queries:
+  - id: nvda-export-controls
+    query: NVIDIA export controls restricting sales of data center GPUs to China
+    ticker: NVDA
+    sections: ["Item 1A", "Part II, Item 1A"]
+
+  - id: aapl-outsourcing
+    query: Apple depends on outsourcing partners in Asia to manufacture its products
+    ticker: AAPL
+    sections: ["Item 1A", "Part II, Item 1A"]
+
+  - id: msft-azure-growth
+    query: what drove Microsoft Azure and other cloud services revenue growth
+    ticker: MSFT
+    sections: ["Item 7", "Part I, Item 2"]
+
+  - id: jpm-nii
+    query: JPMorgan net interest income change driven by deposit margins and rates
+    ticker: JPM
+    sections: ["Item 7", "Part I, Item 2"]
+
+  - id: intc-foundry-risk
+    query: Intel risk that its foundry manufacturing process technology roadmap is delayed
+    ticker: INTC
+    sections: ["Item 1A", "Part II, Item 1A"]
+
+  - id: gs-var
+    query: Goldman Sachs daily value-at-risk VaR by risk category interest rates equity prices
+    ticker: GS
+    sections: ["Item 7", "Item 7A", "Part I, Item 2", "Part I, Item 3"]
+
+  - id: mu-hbm
+    query: Micron high-bandwidth memory HBM demand from AI data centers
+    ticker: MU
+    sections: ["Item 1", "Item 7", "Part I, Item 2"]
+
+  - id: orcl-capex
+    query: Oracle capital expenditures to build cloud infrastructure data centers
+    ticker: ORCL
+    sections: ["Item 7", "Part I, Item 2"]
+
+  - id: adbe-firefly
+    query: Adobe Firefly generative AI models in Creative Cloud
+    ticker: ADBE
+    sections: ["Item 1", "Item 7", "Part I, Item 2"]
+
+  - id: txn-300mm
+    query: Texas Instruments investment in 300-millimeter wafer fabs manufacturing capacity
+    ticker: TXN
+    sections: ["Item 1", "Item 7", "Part I, Item 2"]
+
+  - id: bac-cre
+    query: Bank of America commercial real estate loans office property exposure
+    ticker: BAC
+    sections: ["Item 7", "Part I, Item 2"]
+
+  - id: avgo-vmware
+    query: Broadcom integration of the VMware acquisition
+    ticker: AVGO
+    sections: ["Item 1", "Item 1A", "Item 7", "Part I, Item 2", "Part II, Item 1A"]
+
+  - id: qcom-apple-modem
+    query: Qualcomm risk that Apple stops using its modem chips in iPhones
+    ticker: QCOM
+    sections: ["Item 1A", "Part II, Item 1A"]
+
+  - id: wday-backlog
+    query: Workday subscription revenue backlog and remaining performance obligations
+    ticker: WDAY
+    sections: ["Item 7", "Part I, Item 2"]
+
+  - id: amd-datacenter
+    query: AMD data center segment revenue from Instinct GPUs and EPYC processors
+    ticker: AMD
+    sections: ["Item 7", "Part I, Item 2"]

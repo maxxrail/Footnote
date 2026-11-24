@@ -1,0 +1,51 @@
+# Held-out retrieval set (Part 2): same format as retrieval_gold.yaml.
+#
+# Written and committed BEFORE measuring the contextual-chunk-header change, which was
+# chosen after seeing the gold set's misses. Its score on these queries is the honest one:
+# the gold set can no longer be treated as unseen. Companies the gold set doesn't cover
+# (CRM, NOW, INTU, ADSK, ADI, C, MS, PNC) plus new topics for QCOM and JPM. WFC/USB are
+# left out: their MD&A and Risk Factors are in Exhibit 13, which isn't indexed.
+#
+# Run: uv run python -m analyst.retrieval.evaluate --gold tests/fixtures/retrieval_holdout.yaml
+
+queries:
+  - id: crm-agentforce
+    query: Salesforce Agentforce AI agents and Data Cloud adoption by customers
+    ticker: CRM
+    sections: ["Item 1", "Item 7", "Part I, Item 2"]
+  - id: now-subscription
+    query: ServiceNow subscription revenues growth and remaining performance obligations
+    ticker: NOW
+    sections: ["Item 7", "Part I, Item 2"]
+  - id: intu-seasonality
+    query: Intuit TurboTax revenue seasonality concentrated in the tax filing season
+    ticker: INTU
+    sections: ["Item 1", "Item 1A", "Item 7", "Part I, Item 2"]
+  - id: adsk-transaction-model
+    query: Autodesk transition to a new transaction model and its effect on billings
+    ticker: ADSK
+    sections: ["Item 1A", "Item 7", "Part I, Item 2", "Part II, Item 1A"]
+  - id: adi-industrial
+    query: Analog Devices industrial end market revenue and customer inventory correction
+    ticker: ADI
+    sections: ["Item 7", "Part I, Item 2"]
+  - id: c-consent-orders
+    query: Citigroup consent orders requiring improvements to risk management and data controls
+    ticker: C
+    sections: ["Item 1A", "Item 7", "Part I, Item 2", "Part II, Item 1A"]
+  - id: ms-wealth-flows
+    query: Morgan Stanley wealth management net new assets and fee-based asset flows
+    ticker: MS
+    sections: ["Item 7", "Part I, Item 2"]
+  - id: pnc-acl
+    query: PNC allowance for credit losses on commercial and consumer loans
+    ticker: PNC
+    sections: ["Item 7", "Item 8", "Part I, Item 1", "Part I, Item 2"]
+  - id: qcom-automotive
+    query: Qualcomm automotive revenue growth from Snapdragon Digital Chassis
+    ticker: QCOM
+    sections: ["Item 1", "Item 7", "Part I, Item 2"]
+  - id: jpm-card-chargeoffs
+    query: JPMorgan credit card net charge-off rate and card services loss outlook
+    ticker: JPM
+    sections: ["Item 7", "Part I, Item 2"]

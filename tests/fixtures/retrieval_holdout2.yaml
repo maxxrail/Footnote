@@ -1,0 +1,50 @@
+# Second held-out retrieval set (Part 2): same format as retrieval_gold.yaml.
+#
+# Written and committed BEFORE trying any fix for the gold set's last hybrid miss
+# (orcl-capex) and before running any query here. The gold set and the first held-out
+# set have both been looked at, so this is the honest check that a fix generalises
+# rather than fitting 25 queries. New topics only; WFC/USB left out (Exhibit 13).
+#
+# Run: uv run python -m analyst.retrieval.evaluate --gold tests/fixtures/retrieval_holdout2.yaml
+
+queries:
+  - id: msft-capex
+    query: Microsoft capital expenditures for datacenters and AI infrastructure
+    ticker: MSFT
+    sections: ["Item 7", "Part I, Item 2"]
+  - id: aapl-buybacks
+    query: Apple share repurchase program and dividends returned to shareholders
+    ticker: AAPL
+    sections: ["Item 5", "Item 7", "Part I, Item 2", "Part II, Item 2"]
+  - id: nvda-customer-concentration
+    query: NVIDIA revenue concentration from a small number of direct customers
+    ticker: NVDA
+    sections: ["Item 1A", "Item 7", "Item 8", "Part I, Item 1", "Part I, Item 2"]
+  - id: amd-xilinx-amortization
+    query: AMD amortization of acquisition-related intangibles from the Xilinx acquisition
+    ticker: AMD
+    sections: ["Item 7", "Item 8", "Part I, Item 1", "Part I, Item 2"]
+  - id: intc-restructuring
+    query: Intel restructuring plan headcount reduction and expected cost savings
+    ticker: INTC
+    sections: ["Item 7", "Item 8", "Part I, Item 1", "Part I, Item 2"]
+  - id: gs-principal-investments
+    query: Goldman Sachs reducing historical principal investments on the balance sheet
+    ticker: GS
+    sections: ["Item 7", "Part I, Item 2"]
+  - id: bac-deposits
+    query: Bank of America deposit balances and the cost of deposits
+    ticker: BAC
+    sections: ["Item 7", "Part I, Item 2"]
+  - id: wday-genai
+    query: Workday generative AI features built into its applications
+    ticker: WDAY
+    sections: ["Item 1", "Item 1A", "Item 7", "Part I, Item 2"]
+  - id: avgo-ai-networking
+    query: Broadcom AI revenue from custom accelerators and Ethernet networking
+    ticker: AVGO
+    sections: ["Item 1", "Item 7", "Part I, Item 2"]
+  - id: adbe-digital-media-arr
+    query: Adobe Digital Media annualized recurring revenue growth
+    ticker: ADBE
+    sections: ["Item 1", "Item 7", "Part I, Item 2"]

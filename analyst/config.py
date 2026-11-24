@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = None
     anthropic_model: str = "claude-sonnet-5-5"
     data_dir: Path = Path("data")
+    # Part 2: cross-encoder rerank of fused search results (slower; needs the ml extra).
+    rerank: bool = False
 
     @property
     def raw_dir(self) -> Path:

@@ -5,8 +5,10 @@ from __future__ import annotations
 import datetime as dt
 from decimal import Decimal
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
+    Computed,
     Date,
     ForeignKey,
     Index,
@@ -15,6 +17,7 @@ from sqlalchemy import (
     String,
     Text,
 )
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -80,3 +83,75 @@ class Fact(Base):
     form: Mapped[str] = mapped_column(String(32))
     accession: Mapped[str] = mapped_column(ForeignKey("filings.accession"), index=True)
     frame: Mapped[str | None] = mapped_column(String(16))
+
+
+# -- Part 2: filing text, sections and chunks for search ----------------------------------
+
+EMBEDDING_DIM = 384  # BAAI/bge-small-en-v1.5
+
+
+class FilingText(Base):
+    """The clean text of one filing's primary document. Every citation span points here."""
+
+    __tablename__ = "filing_texts"
+
+    accession: Mapped[str] = mapped_column(
+        ForeignKey("filings.accession", ondelete="CASCADE"), primary_key=True
+    )
+    text: Mapped[str] = mapped_column(Text)
+    parser_version: Mapped[int] = mapped_column(Integer)
+    source_sha256: Mapped[str] = mapped_column(String(64))  # of the raw HTML
+
+
+class FilingSection(Base):
+    __tablename__ = "filing_sections"
+
+    accession: Mapped[str] = mapped_column(
+        ForeignKey("filing_texts.accession", ondelete="CASCADE"), primary_key=True
+    )
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True)
+    section: Mapped[str] = mapped_column(String(32))  # "Item 1A", "Part I, Item 2", "Cover"
+    char_start: Mapped[int] = mapped_column(Integer)
+    char_end: Mapped[int] = mapped_column(Integer)
+
+
+class Chunk(Base):
+    __tablename__ = "chunks"
+    __table_args__ = (
+        Index("uq_chunks_span", "accession", "char_start", "char_end", unique=True),
+        Index("ix_chunks_cik_section", "cik", "section"),
+        Index(
+            "ix_chunks_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+        Index("ix_chunks_tsv", "tsv", postgresql_using="gin"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    accession: Mapped[str] = mapped_column(ForeignKey("filing_texts.accession", ondelete="CASCADE"))
+    cik: Mapped[int] = mapped_column(ForeignKey("companies.cik"))
+    section: Mapped[str] = mapped_column(String(32))
+    char_start: Mapped[int] = mapped_column(Integer)
+    char_end: Mapped[int] = mapped_column(Integer)
+    text: Mapped[str] = mapped_column(Text)
+    # Contextual header ("Texas Instruments Inc (TXN), 10-K filed 2025-02-14. Item 1: Business.")
+    # indexed and embedded with the chunk, because chunk text says "we", not the company's
+    # name. Never part of a citation: `text` alone is the cited span.
+    context: Mapped[str] = mapped_column(Text, server_default="")
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM))
+    embed_model: Mapped[str | None] = mapped_column(String(128))
+    tsv: Mapped[str] = mapped_column(
+        TSVECTOR, Computed("to_tsvector('english', context || ' ' || text)", persisted=True)
+    )
+
+    @property
+    def indexed_text(self) -> str:
+        return indexed_text(self.context, self.text)
+
+
+def indexed_text(context: str, text: str) -> str:
+    """What the embedder and reranker read: header, blank line, chunk text."""
+    return f"{context}\n\n{text}" if context else text
