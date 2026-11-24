@@ -1,11 +1,11 @@
 # Progress
 
-**Current part:** 2 (done, in review). Next: 3
+**Current part:** 2 (in review; acceptance check 3 met only ticker-filtered, Maxx to decide). Next: 3
 
 | Part | Name | Status |
 |------|------|--------|
 | 1 | Financial data layer (SEC EDGAR + XBRL) | done (v0.1.0) |
-| 2 | Filing search with citations (hybrid retrieval) | done (v0.2.0, PR open) |
+| 2 | Filing search with citations (hybrid retrieval) | in review (v0.2.0, PR open): 3 of 4 checks pass, "hybrid ≥ both" met ticker-filtered only |
 | 3 | The analyst agent (tools, deterministic math, cited answers) | not started |
 | 4 | Banker deliverables (comps → Excel, tearsheet, earnings brief) | not started |
 | 5 | Evals (golden set, numeric + citation graders, CI gate) | not started |
@@ -43,7 +43,11 @@
 - P2: The token count is a regex estimate (`\w+|[^\w\s]`); real BGE WordPiece tokens are 1.08× that (p10 1.04, p90 1.13). So an "800-token" chunk is ~860 model tokens, and bge-small truncates at 512, which is why ADR 0004 compares 450-token chunks.
 - P2: `sentence-transformers`/torch are in an optional `ml` extra (`uv sync --extra dev --extra ml`). Tests use a deterministic `HashEmbedder` and a fake reranker, so CI doesn't download models.
 - P2: Rerank is off by default (`RERANK=false` in settings, `--rerank` on the CLI).
-- P2: pgvector `hnsw.iterative_scan = strict_order` so filtered vector queries still return 50 candidates.
+- P2: The vector query orders by distance alone, so Postgres can use the HNSW index (review finding: an `id` tiebreak had forced an exact scan). `hnsw.iterative_scan = strict_order` keeps filtered queries at 50 candidates. With selective filters (one company) Postgres picks an exact scan instead, which is fine at this size.
+- P2: Citations carry `text_sha256` of the cited text; `verify()` checks it, so a moved `char_end` fails too (review finding).
+- P2: `forms`/`sections` filters are case-insensitive (`10-k`, `item 1a`).
+- P2: Tests can't fall back to the default DB engine: an autouse fixture makes `get_engine()` raise, so code under test must be handed the test session.
+- P2: The spec mentions BeautifulSoup/lxml; the parser uses lxml only, so `beautifulsoup4` is not a dependency.
 - P2: Test DB isolation fix: tests create their tables with `checkfirst=False` in the throwaway schema and assert every table resolves there before truncating (see Notes for Maxx: incident).
 - P2: WFC and USB keep Risk Factors and MD&A in Exhibit 13, which isn't downloaded. Their Item 1A/7 are detected but short. Left as-is (ADR 0003 says how to fix).
 
@@ -165,7 +169,7 @@ The 6 short 10-Ks are WFC × 3 and USB × 3 (Risk Factors ~250 chars, MD&A ~300 
 
 **2. `pytest`, `ruff` clean: PASS**
 ```
-136 passed in 25.55s
+139 passed in 25.95s
 All checks passed!
 57 files already formatted
 Success: no issues found in 38 source files   (mypy)
@@ -177,10 +181,10 @@ No new upgrade operations detected.            (alembic check)
 $ uv run python -m analyst.retrieval.evaluate --rerank --misses
 | Retriever | open (no filter) | ticker-filtered | s/query (open) |
 |---|---|---|---|
-| vector-only | 0.93 (14/15) | 0.93 (14/15) | 1.54 |
+| vector-only | 0.93 (14/15) | 0.93 (14/15) | 0.48 |
 | full-text-only | 0.87 (13/15) | 0.93 (14/15) | 0.13 |
-| hybrid (RRF) | 0.87 (13/15) | 0.93 (14/15) | 0.18 |
-| hybrid + rerank | 1.00 (15/15) | 1.00 (15/15) | 9.48 |
+| hybrid (RRF) | 0.87 (13/15) | 0.93 (14/15) | 0.15 |
+| hybrid + rerank | 1.00 (15/15) | 1.00 (15/15) | 7.76 |
 
 vector-only: open missed ['orcl-capex']; filtered missed ['orcl-capex']
 full-text-only: open missed ['orcl-capex', 'qcom-apple-modem']; filtered missed ['orcl-capex']
@@ -195,7 +199,9 @@ ADR 0004 has the per-query ranks and the follow-ups (dedupe near-duplicates; rer
 
 **4. README "Part 2" section: PASS**: README.md → "Part 2: Filing search with citations".
 
-**Mutation checks** (`uv run python scripts/mutation_check_part2.py`): **30/30** caught.
+Re-run after the review fixes (HNSW now used by the vector leg): same recall and misses. Before the fix, with an exact scan, vector-only took 1.54 s/query and hybrid + rerank 9.48 s/query.
+
+**Mutation checks** (`uv run python scripts/mutation_check_part2.py`): **35/35** caught (30 before the review, 5 added for its findings).
 ```
 CAUGHT | TOC lines skipped (keep page-numbered lines) | 1 failed, 1 passed
 CAUGHT | last real heading wins (no weight for real sections) | 1 failed, 2 passed
@@ -220,16 +226,36 @@ CAUGHT | since filter (ignored) | 3 failed
 CAUGHT | full-text OR-s query terms (AND) | 1 failed
 CAUGHT | full-text IDF weighting (none) | 1 failed, 1 passed
 CAUGHT | rerank off by default (always on) | 1 failed
+CAUGHT | vector leg can use HNSW (add an id tiebreak to ORDER BY) | 1 failed
+CAUGHT | ticker and cik must agree (ignore cik) | 1 failed
+CAUGHT | form filter ignores case (exact match) | 1 failed
 CAUGHT | idempotent index (always reparse) | 1 failed
 CAUGHT | reparse on changed HTML (never) | 1 failed
 CAUGHT | only embed pending chunks (re-embed all) | 1 failed
 CAUGHT | resolve returns the exact span (off by one) | 1 failed
 CAUGHT | verify checks the text (always true) | 1 failed
+CAUGHT | verify checks the exact span (snippet prefix only) | 1 failed
 CAUGHT | resolve rejects spans past the end (accept) | 1 failed
 CAUGHT | tests never touch the real tables (checkfirst=True) | 1 error
+CAUGHT | tests can't reach the real DB via the default engine (guard off) | 1 failed
 ```
 The first full run missed 3 (TOC filter, tie-to-later, IDF). Each now has a test that targets it:
 the end-of-document cross-reference index, equal-weight chains, and 8 "company" chunks vs one rare-term chunk.
+
+**part-reviewer findings and what was done**
+| # | Finding | Action |
+|---|---|---|
+| 1 | Status lines said "done" though check 3 isn't fully met | Fixed: status, README and CHANGELOG now say it's met ticker-filtered only. Maxx decides whether that's enough to tag. |
+| 2 | `verify()` accepted a citation whose `char_end` was moved inside the document | Fixed: `Citation.text_sha256`, checked by `verify()`. New test and mutation. |
+| 3 | The `id` tiebreak in ORDER BY stopped Postgres using HNSW (EXPLAIN: seq scan + sort); docs claimed HNSW | Fixed: order by distance only. EXPLAIN now shows `Index Scan using ix_chunks_embedding_hnsw`. Test asserts the plan; mutation added. Eval re-run: same recall. |
+| 4 | Code under test could fall back to the default engine (real DB) | Fixed: autouse fixture makes `get_engine()` raise. Test and mutation. |
+| 5 | README said 75/75 without the 92% substantive figure | Fixed. |
+| 6 | Hyphenated compound lexemes (`data-cent`) re-parsed into a phrase | Checked: the old phrase form matched the same rows (`third-parti`: 2,545 both ways), and `data-cent` really has df 0. Switched to a direct `::tsquery` cast anyway (simpler, exact lexeme). |
+| 7 | ticker + conflicting cik → `[]` untested | Fixed: test and mutation. |
+| 8 | Filters case-sensitive (`--form 10-k` found nothing) | Fixed: case-insensitive forms and sections. Test and mutation. |
+| 9 | Reranker also truncates at 512 tokens; `score` becomes the cross-encoder logit | Documented in `search.py` and ADR 0004. |
+| 10 | `beautifulsoup4` unused | Removed. |
+| 11 | Stale "tag v0.1.0" note | Removed. |
 
 ## Notes for Maxx
 <!-- Anything the user has to do by hand (keys, Docker, accounts). -->
@@ -237,7 +263,6 @@ the end-of-document cross-reference index, equal-weight chains, and 8 "company" 
 - The project's Postgres runs on **localhost:5433** (container `footnote-db-1`), because your frontdesk-agent db and a native Postgres already use 5432.
 - `data/raw/` (918 MB, gitignored) is the SEC cache. Deleting it means the next ingest re-downloads (~6 min).
 - To pull new filings later: `uv run python -m analyst.edgar.ingest --universe data/universe.csv --refresh`.
-- After merging: tag `v0.1.0` on main.
 - **P2 incident (fixed):** during Part 2 a test-setup change made `create_all(checkfirst=True)` see the real `public` tables through the search path, so the test fixture's TRUNCATE emptied your dev DB's `companies`, `filings` and `facts`. I rebuilt them from `data/raw/` with 0 SEC requests (`companies=25 filings=230954 facts=823354`, the same as Part 1's rebuild) and deleted only the synthetic test rows afterwards. Tests now always create their own tables and refuse to truncate unless every table resolves to the test schema (mutation-checked).
 - Real embeddings need `uv sync --extra dev --extra ml` (CPU torch, ~1 GB). The first run downloads the models to `~/.cache/huggingface`. Full index: ~70 s to parse, ~30 min to embed.
 - The embedding run was killed once by Claude Code for low memory (13,632/20,456). Re-running `python -m analyst.retrieval.index` picks up where it stopped.

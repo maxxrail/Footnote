@@ -2,15 +2,19 @@
 
     search("supply chain risk", cik=1045810, forms=["10-K"], sections=["Item 1A"], k=8)
 
-- Vector leg: cosine distance on `chunks.embedding` (pgvector HNSW, iterative scan so
-  filters don't starve the index).
+- Vector leg: cosine distance on `chunks.embedding`. Ordered by distance alone so the
+  planner can use the HNSW index; with `hnsw.iterative_scan = strict_order` a filtered
+  query keeps scanning the graph until it has n rows. (With selective filters, e.g. one
+  company, Postgres may pick an exact scan instead; both give the same top n.)
 - Lexical leg: Postgres full text. Query lexemes are OR-ed (an AND of every word in a
   natural-language question matches almost nothing), and each term's `ts_rank` is
   weighted by its BM25 IDF over the chunk collection, so "tariffs" counts for more than
   "company". Postgres has no BM25; this is the closest cheap equivalent.
 - Fusion: Reciprocal Rank Fusion, score = Σ 1 / (RRF_K + rank), rank from 1.
 - Optional cross-encoder rerank (`BAAI/bge-reranker-base`) of the fused top candidates,
-  behind `rerank=True` or `RERANK=true` in `.env`.
+  behind `rerank=True` or `RERANK=true` in `.env`. It reads the first 512 tokens of each
+  chunk, and after a rerank `Citation.score` is the cross-encoder logit, not the RRF score.
+- Filters: `forms` and `sections` match case-insensitively ("10-k", "item 1a").
 """
 
 from __future__ import annotations
@@ -23,12 +27,13 @@ from functools import lru_cache
 from typing import Any, Literal, Protocol
 
 from sqlalchemy import ColumnElement, Select, Text, and_, func, literal, select, text
+from sqlalchemy.dialects.postgresql import TSQUERY
 from sqlalchemy.orm import Session
 
 from analyst.config import get_settings
 from analyst.db.models import Chunk, Company, Filing
 from analyst.db.session import session_scope
-from analyst.retrieval.citation import Citation, make_snippet
+from analyst.retrieval.citation import Citation, make_snippet, text_hash
 from analyst.retrieval.embed import Embedder, default_embedder
 from analyst.retrieval.parse import section_title
 
@@ -101,9 +106,9 @@ def _filters(
     if cik is not None:
         out.append(Chunk.cik == cik)
     if forms:
-        out.append(Filing.form.in_(list(forms)))
+        out.append(func.upper(Filing.form).in_([f.upper() for f in forms]))
     if sections:
-        out.append(Chunk.section.in_(list(sections)))
+        out.append(func.lower(Chunk.section).in_([x.lower() for x in sections]))
     if since is not None:
         out.append(Filing.filed_at >= since)
     return out
@@ -121,12 +126,13 @@ def vector_ids(
     n: int = CANDIDATES,
 ) -> list[int]:
     # Keep scanning the HNSW graph until n rows pass the filters, in exact distance order.
+    # Order by distance only: a second sort key stops Postgres from using the HNSW index.
     session.execute(text("SET LOCAL hnsw.iterative_scan = strict_order"))
     session.execute(text(f"SET LOCAL hnsw.ef_search = {max(n * 2, 40)}"))
     q = (
         _base(filters)
         .where(Chunk.embedding.is_not(None))
-        .order_by(Chunk.embedding.cosine_distance(list(query_vec)), Chunk.id)
+        .order_by(Chunk.embedding.cosine_distance(list(query_vec)))
         .limit(n)
     )
     return list(session.scalars(q))
@@ -136,7 +142,11 @@ _LEXEME = re.compile(r"'((?:[^']|'')+)'")
 
 
 def query_lexemes(session: Session, query: str) -> list[str]:
-    """Stemmed, stopword-free lexemes of `query` (as tsquery-quoted text, deduplicated)."""
+    """Stemmed, stopword-free lexemes of `query` (as tsquery-quoted text, deduplicated).
+
+    Hyphenated words give a compound lexeme plus its parts ('data-cent', 'data', 'center').
+    All are kept: each is cast straight to `tsquery`, so the compound stays one lexeme and
+    matches the compound `to_tsvector('english')` stored for the same word."""
     tsq = session.scalar(select(func.plainto_tsquery("english", query).cast(Text)))
     seen: dict[str, None] = {}
     for m in _LEXEME.finditer(tsq or ""):
@@ -156,7 +166,7 @@ def text_ids(
     total = session.scalar(select(func.count(Chunk.id))) or 0
     weighted: list[tuple[Any, float]] = []
     for lex in lexemes:
-        term = func.to_tsquery("simple", literal(f"'{lex}'"))
+        term = literal(f"'{lex}'").cast(TSQUERY)
         df = session.scalar(select(func.count(Chunk.id)).where(Chunk.tsv.op("@@")(term))) or 0
         if df == 0:
             continue
@@ -164,7 +174,7 @@ def text_ids(
         weighted.append((term, idf))
     if not weighted:
         return []
-    any_term = func.to_tsquery("simple", literal(" | ".join(f"'{lex}'" for lex in lexemes)))
+    any_term = literal(" | ".join(f"'{lex}'" for lex in lexemes)).cast(TSQUERY)
     # ts_rank normalisation 1: divide by 1 + log(chunk length)
     rank = sum(
         (func.ts_rank(Chunk.tsv, term, 1) * idf for term, idf in weighted),
@@ -204,6 +214,7 @@ def _citations(session: Session, ranked: Sequence[tuple[int, float]]) -> list[Ci
                 char_start=c.char_start,
                 char_end=c.char_end,
                 snippet=make_snippet(c.text),
+                text_sha256=text_hash(c.text),
                 url=f.url,
                 chunk_id=c.id,
                 score=score,

@@ -21,15 +21,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `PARSER_VERSION` changes).
 - `analyst/retrieval/search.py`: `search(query, cik, forms, sections, since, k)`, vector top-50 +
   Postgres full-text top-50 fused with RRF (k=60), optional `BAAI/bge-reranker-base` rerank
-  (`RERANK=true` or `--rerank`). Returns `Citation`s; `resolve()` / `verify()` read the exact span.
+  (`RERANK=true` or `--rerank`). Returns `Citation`s with a hash of the cited text;
+  `resolve()` returns the exact span and `verify()` checks it. Form/section filters ignore case.
 - `python -m analyst.retrieval.cli "supply chain risk" --ticker NVDA`.
 - `tests/fixtures/retrieval_gold.yaml` (15 queries) and `python -m analyst.retrieval.evaluate`
   (recall@k per retriever).
-- `scripts/section_survey.py`, `scripts/mutation_check_part2.py` (30 mutations), ADRs 0003-0004.
+- `scripts/section_survey.py`, `scripts/mutation_check_part2.py` (35 mutations), ADRs 0003-0004.
+
+### Known gaps
+- Retrieval eval (15 queries, recall@5): hybrid 13/15 vs vector-only 14/15 on the open set, so the
+  spec's "hybrid ≥ both" holds only ticker-filtered (14/15 each). Hybrid + rerank: 15/15. See ADR 0004.
+- WFC/USB Risk Factors and MD&A live in Exhibit 13, which isn't downloaded.
 
 ### Fixed
-- Test DB isolation: test tables are always created in the throwaway schema, and the fixture
-  refuses to truncate if any table resolves to `public`.
+- Test DB isolation: test tables are always created in the throwaway schema, the fixture
+  refuses to truncate if any table resolves to `public`, and code under test can't fall back
+  to the default engine.
 
 ## [0.1.0] - 2026-11-23: Part 1, financial data layer
 

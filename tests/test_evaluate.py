@@ -42,6 +42,7 @@ def cite(ticker: str, section: str) -> Citation:
         char_start=0,
         char_end=1,
         snippet="x",
+        text_sha256="0" * 64,
         url="u",
     )
 

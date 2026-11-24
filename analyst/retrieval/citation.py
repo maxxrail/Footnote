@@ -7,6 +7,7 @@ citation the agent emits can be checked later (Part 5's citation grader uses it)
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -30,9 +31,14 @@ class Citation(BaseModel):
     char_start: int = Field(description="offset into filing_texts.text (0-based, inclusive)")
     char_end: int = Field(description="offset into filing_texts.text (exclusive)")
     snippet: str = Field(description="start of the cited text, possibly cut with an ellipsis")
+    text_sha256: str = Field(description="sha256 of the exact cited text (UTF-8), for verify()")
     url: str = Field(description="the filing's primary document on sec.gov")
     chunk_id: int | None = None
     score: float | None = None
+
+
+def text_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def make_snippet(text: str, limit: int = 300) -> str:
@@ -73,9 +79,12 @@ def resolve(citation: Citation, session: Session | None = None) -> str:
 
 
 def verify(citation: Citation, session: Session | None = None) -> bool:
-    """True if the span exists and its text starts with the citation's snippet."""
+    """True if the span exists, its text hashes to `text_sha256` (so a moved start *or*
+    end fails) and starts with the citation's snippet."""
     try:
         text = resolve(citation, session)
     except (LookupError, ValueError):
         return False
-    return text.startswith(citation.snippet.removesuffix(ELLIPSIS))
+    return text_hash(text) == citation.text_sha256 and text.startswith(
+        citation.snippet.removesuffix(ELLIPSIS)
+    )

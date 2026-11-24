@@ -236,6 +236,44 @@ def test_ticker_filter(indexed: SessionFactory) -> None:
     hits = _search(indexed, "tariffs", ticker="bank", k=5)
     assert hits and {h.ticker for h in hits} == {"BANK"}
     assert _search(indexed, "tariffs", ticker="NOPE") == []
+    # ticker and cik that disagree: nothing, rather than silently picking one
+    assert _search(indexed, "tariffs", ticker="BANK", cik=1) == []
+    assert _search(indexed, "tariffs", ticker="BANK", cik=2)
+
+
+def test_form_and_section_filters_ignore_case(indexed: SessionFactory) -> None:
+    hits = _search(indexed, "tariffs export", forms=["10-q"], sections=["part i, item 2"], k=5)
+    assert hits and all((h.form, h.section) == ("10-Q", "Part I, Item 2") for h in hits)
+
+
+def test_vector_leg_can_use_the_hnsw_index(indexed: SessionFactory) -> None:
+    # The test table is tiny, so Postgres would seq-scan anyway; forbid that and check the
+    # query's shape lets it use HNSW (a second ORDER BY key would force a sort).
+    from sqlalchemy import text
+
+    from analyst.retrieval.search import vector_ids
+
+    captured: list[str] = []
+    with indexed() as s:
+        s.execute(text("SET LOCAL enable_seqscan = off"))
+        s.execute(text("SET LOCAL enable_sort = off"))
+        real = s.scalars
+
+        def explain(q, *a, **kw):
+            sql = str(q.compile(s.get_bind(), compile_kwargs={"literal_binds": True}))
+            captured.extend(r[0] for r in s.execute(text("EXPLAIN " + sql)))
+            return real(q, *a, **kw)
+
+        s.scalars = explain  # type: ignore[method-assign,assignment]
+        ids = vector_ids(s, HashEmbedder().embed_query("export tariffs"), [])
+    assert ids
+    assert any("ix_chunks_embedding_hnsw" in line for line in captured), captured
+
+
+def test_tests_cannot_fall_back_to_the_real_db() -> None:
+    # no session injected -> default engine -> refused by the conftest guard
+    with pytest.raises(RuntimeError, match="default DB engine"):
+        search("tariffs", embedder=HashEmbedder())
 
 
 def test_ten_q_sections_are_part_qualified(indexed: SessionFactory) -> None:
@@ -329,5 +367,11 @@ def test_tampered_citation_fails_verification(indexed: SessionFactory) -> None:
         assert not verify(h.model_copy(update={"char_start": h.char_start + 5}), s)
         assert not verify(h.model_copy(update={"accession": "0000000009-25-000009"}), s)
         assert not verify(h.model_copy(update={"char_end": 10**9}), s)
+        # end moved but still inside the document: the snippet still matches, the hash doesn't
+        assert not verify(h.model_copy(update={"char_end": h.char_end + 40}), s)
+        assert not verify(h.model_copy(update={"char_end": h.char_end - 1}), s)
+        assert verify(h, s)
+        with pytest.raises(ValueError, match="past end"):
+            resolve(h.model_copy(update={"char_end": 10**9}), s)
         with pytest.raises(LookupError):
             resolve(h.model_copy(update={"accession": "0000000009-25-000009"}), s)

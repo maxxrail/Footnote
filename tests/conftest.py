@@ -20,6 +20,7 @@ import pytest
 from sqlalchemy import Connection, Engine, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
+import analyst.db.session
 from analyst.config import get_settings
 from analyst.db.models import Base
 from analyst.edgar.client import SecClient, TokenBucket
@@ -41,6 +42,17 @@ def _no_internet(monkeypatch: pytest.MonkeyPatch) -> None:
         real_connect(self, address)  # type: ignore[arg-type]
 
     monkeypatch.setattr(socket.socket, "connect", guarded)
+
+
+@pytest.fixture(autouse=True)
+def _no_default_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Code under test must get the test engine/session injected. Falling back to the
+    default engine would read and write the real dev DB's public tables."""
+
+    def refuse(url: str | None = None) -> Engine:
+        raise RuntimeError("test used the default DB engine; inject a session or engine")
+
+    monkeypatch.setattr(analyst.db.session, "get_engine", refuse)
 
 
 def load_fixture(name: str) -> dict:

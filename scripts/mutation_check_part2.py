@@ -159,14 +159,14 @@ MUTS = [
     (
         "form filter (ignored)",
         SEARCH,
-        "out.append(Filing.form.in_(list(forms)))",
+        "out.append(func.upper(Filing.form).in_([f.upper() for f in forms]))",
         "pass",
         [T_S + "test_filters_are_respected"],
     ),
     (
         "section filter (ignored)",
         SEARCH,
-        "out.append(Chunk.section.in_(list(sections)))",
+        "out.append(func.lower(Chunk.section).in_([x.lower() for x in sections]))",
         "pass",
         [T_S + "test_filters_are_respected"],
     ),
@@ -197,6 +197,27 @@ MUTS = [
         "rerank = get_settings().rerank",
         "rerank = True",
         [T_S + "test_rerank_flag"],
+    ),
+    (
+        "vector leg can use HNSW (add an id tiebreak to ORDER BY)",
+        SEARCH,
+        ".order_by(Chunk.embedding.cosine_distance(list(query_vec)))",
+        ".order_by(Chunk.embedding.cosine_distance(list(query_vec)), Chunk.id)",
+        [T_S + "test_vector_leg_can_use_the_hnsw_index"],
+    ),
+    (
+        "ticker and cik must agree (ignore cik)",
+        SEARCH,
+        "if cik is not None and cik != found:",
+        "if False:",
+        [T_S + "test_ticker_filter"],
+    ),
+    (
+        "form filter ignores case (exact match)",
+        SEARCH,
+        "func.upper(Filing.form).in_([f.upper() for f in forms])",
+        "Filing.form.in_(list(forms))",
+        [T_S + "test_form_and_section_filters_ignore_case"],
     ),
     # -- index / embed / citations --------------------------------------------------------
     (
@@ -230,8 +251,15 @@ MUTS = [
     (
         "verify checks the text (always true)",
         CITE,
-        "return text.startswith(citation.snippet.removesuffix(ELLIPSIS))",
-        "return True",
+        "return text_hash(text) == citation.text_sha256 and text.startswith(",
+        "return True or (",
+        [T_S + "test_tampered_citation_fails_verification"],
+    ),
+    (
+        "verify checks the exact span (snippet prefix only)",
+        CITE,
+        "return text_hash(text) == citation.text_sha256 and text.startswith(",
+        "return text.startswith(",
         [T_S + "test_tampered_citation_fails_verification"],
     ),
     (
@@ -248,6 +276,13 @@ MUTS = [
         "Base.metadata.create_all(engine, checkfirst=False)",
         "Base.metadata.create_all(engine, checkfirst=True)",
         [T_S + "test_index_is_idempotent"],
+    ),
+    (
+        "tests can't reach the real DB via the default engine (guard off)",
+        "tests/conftest.py",
+        'monkeypatch.setattr(analyst.db.session, "get_engine", refuse)',
+        "pass",
+        [T_S + "test_tests_cannot_fall_back_to_the_real_db"],
     ),
 ]
 

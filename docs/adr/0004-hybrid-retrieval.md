@@ -34,13 +34,15 @@ Options 2 + 3, rerank **off** by default (`RERANK=true` or `--rerank` turns it o
 
 | Retriever | open (no filter) | ticker-filtered | s/query (open, CPU) |
 |---|---|---|---|
-| vector-only | 0.93 (14/15) | 0.93 (14/15) | 1.54 |
+| vector-only | 0.93 (14/15) | 0.93 (14/15) | 0.48 |
 | full-text-only (OR + IDF) | 0.87 (13/15) | 0.93 (14/15) | 0.13 |
-| hybrid (RRF) | 0.87 (13/15) | 0.93 (14/15) | 0.18 |
-| hybrid + rerank | **1.00 (15/15)** | **1.00 (15/15)** | 9.48 |
+| hybrid (RRF) | 0.87 (13/15) | 0.93 (14/15) | 0.15 |
+| hybrid + rerank | **1.00 (15/15)** | **1.00 (15/15)** | 7.76 |
 
-(vector-only's 1.54 s includes loading the model on the first query; hybrid's 0.18 s
-does not, because it runs after.)
+(vector-only's time includes loading the model on the first query; hybrid's does not,
+because it runs after. These numbers use the HNSW index. A first run, where an `id`
+tiebreak in ORDER BY forced an exact scan, gave identical recall and misses; vector-only
+then took 1.54 s/query.)
 
 **Hybrid is not ≥ vector-only on the open set: the spec's target is met only with the
 ticker filter.** The one query hybrid loses is `txn-300mm`. Both legs rank a TXN chunk
@@ -75,7 +77,9 @@ Why the decision still stands:
 
 ## Consequences
 
-- Rerank is the clear quality win (15/15) but costs ~9 s/query on CPU, so it stays a flag.
+- Rerank is the clear quality win (15/15) but costs ~8 s/query on CPU, so it stays a flag.
+  It also reads only the first 512 tokens of each chunk (`max_length=512`), and after a
+  rerank `Citation.score` is the cross-encoder logit rather than the RRF score.
   Revisit in Part 5, with the larger eval set: turn it on for the agent if latency allows,
   or rerank a smaller pool.
 - Near-duplicate passages across filings crowd results. Candidate fixes for Part 5, to be
