@@ -137,8 +137,17 @@ class Chunk(Base):
     char_start: Mapped[int] = mapped_column(Integer)
     char_end: Mapped[int] = mapped_column(Integer)
     text: Mapped[str] = mapped_column(Text)
+    # Contextual header ("Texas Instruments Inc (TXN), 10-K filed 2025-02-14. Item 1: Business.")
+    # indexed and embedded with the chunk, because chunk text says "we", not the company's
+    # name. Never part of a citation: `text` alone is the cited span.
+    context: Mapped[str] = mapped_column(Text, server_default="")
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM))
     embed_model: Mapped[str | None] = mapped_column(String(128))
     tsv: Mapped[str] = mapped_column(
-        TSVECTOR, Computed("to_tsvector('english', text)", persisted=True)
+        TSVECTOR, Computed("to_tsvector('english', context || ' ' || text)", persisted=True)
     )
+
+    @property
+    def indexed_text(self) -> str:
+        """What the embedder and reranker read: header, blank line, chunk text."""
+        return f"{self.context}\n\n{self.text}" if self.context else self.text

@@ -270,11 +270,10 @@ def search(
         rerank = get_settings().rerank
     if rerank and fused:
         pool = fused[: max(k, RERANK_POOL)]
-        texts = dict(
-            session.execute(
-                select(Chunk.id, Chunk.text).where(Chunk.id.in_([i for i, _ in pool]))
-            ).all()
-        )
+        texts = {
+            c.id: c.indexed_text
+            for c in session.scalars(select(Chunk).where(Chunk.id.in_([i for i, _ in pool])))
+        }
         scores = (reranker or default_reranker()).score(query, [texts[i] for i, _ in pool])
         fused = sorted(
             ((i, s) for (i, _), s in zip(pool, scores, strict=True)), key=lambda kv: -kv[1]

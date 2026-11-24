@@ -25,8 +25,10 @@ from pathlib import Path
 
 from lxml import etree
 
-# Bump when cleaning or section detection changes: stored texts/chunks are rebuilt.
-PARSER_VERSION = 1
+# Bump when cleaning, section detection, chunking or chunk headers change: the indexer
+# then rebuilds every filing's stored text, sections and chunks.
+# 1: first version. 2: chunks carry a contextual header (chunks.context).
+PARSER_VERSION = 2
 
 BLOCK_TAGS = frozenset(
     [

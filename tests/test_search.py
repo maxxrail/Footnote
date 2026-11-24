@@ -350,6 +350,39 @@ def test_rerank_flag(indexed: SessionFactory) -> None:
 # -- citations -----------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("mode", ["vector", "text"])
+def test_company_name_found_through_the_chunk_header(indexed: SessionFactory, mode: str) -> None:
+    # No chunk's text names its company ("CHIP Corp" is only in the header), but a query
+    # naming the company must still find that company's chunks, in each leg on its own.
+    for name in ("CHIP", "BANK"):
+        hits = _search(indexed, f"{name} {name} Corp", mode=mode, k=1)
+        assert hits and hits[0].ticker == name, (name, hits)
+    with indexed() as s:
+        texts = s.scalars(select(Chunk.text)).all()
+    assert not any("CHIP" in t for t in texts)
+
+
+def test_chunk_header_is_indexed_but_never_cited(indexed: SessionFactory) -> None:
+    with indexed() as s:
+        c = s.scalars(
+            select(Chunk)
+            .where(Chunk.accession == "0000000001-24-000001", Chunk.section == "Item 1A")
+            .limit(1)
+        ).one()
+        assert c.context == "CHIP Corp (CHIP), 10-K filed 2024-02-01. Item 1A: Risk Factors."
+        ft = s.get(FilingText, c.accession)
+        assert ft is not None and ft.text[c.char_start : c.char_end] == c.text
+        assert c.context not in ft.text
+        assert c.indexed_text == f"{c.context}\n\n{c.text}"
+
+
+def test_company_label_strips_sec_state_suffixes() -> None:
+    assert index_mod.company_label("BANK OF AMERICA CORP /DE/") == "BANK OF AMERICA CORP"
+    assert index_mod.company_label("US BANCORP \\DE\\") == "US BANCORP"
+    assert index_mod.company_label("WELLS FARGO & COMPANY/MN") == "WELLS FARGO & COMPANY"
+    assert index_mod.company_label("Apple Inc.") == "Apple Inc."
+
+
 def test_citation_resolves_to_exact_chunk_text(indexed: SessionFactory) -> None:
     hits = _search(indexed, "net interest margin deposit costs", k=5)
     assert hits

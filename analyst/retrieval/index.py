@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import logging
+import re
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -31,11 +32,29 @@ from analyst.db.session import session_scope
 from analyst.edgar.ingest import document_path
 from analyst.retrieval.chunk import MAX_TOKENS, OVERLAP_TOKENS, chunk_filing
 from analyst.retrieval.embed import Embedder, default_embedder, embed_pending
-from analyst.retrieval.parse import PARSER_VERSION, parse_filing
+from analyst.retrieval.parse import PARSER_VERSION, parse_filing, section_title
 
 log = logging.getLogger("analyst.retrieval.index")
 
 FORMS = ("10-K", "10-Q")
+
+# SEC conformed names carry state suffixes: "BANK OF AMERICA CORP /DE/", "US BANCORP \DE\"
+_STATE_SUFFIX = re.compile(r"\s*[/\\][A-Z]{2}[/\\]?\s*$")
+
+
+def company_label(name: str) -> str:
+    return _STATE_SUFFIX.sub("", name).strip()
+
+
+def chunk_context(company: Company, filing: Filing, section: str) -> str:
+    """Header indexed and embedded with every chunk (never cited):
+    'Texas Instruments Inc (TXN), 10-K filed 2025-02-14. Item 1: Business.'"""
+    title = section_title(section)
+    where = section if title == section else f"{section}: {title}"
+    return (
+        f"{company_label(company.name)} ({company.ticker}), {filing.form} filed "
+        f"{filing.filed_at.isoformat()}. {where}."
+    )
 
 
 @dataclass
@@ -92,6 +111,9 @@ def index_filing(
             ],
         )
     chunks = chunk_filing(parsed, max_tokens, overlap_tokens)
+    company = session.get(Company, filing.cik)
+    if company is None:
+        raise LookupError(f"filing {filing.accession}: no company row for CIK {filing.cik}")
     if chunks:
         session.execute(
             insert(Chunk),
@@ -103,6 +125,7 @@ def index_filing(
                     "char_start": c.char_start,
                     "char_end": c.char_end,
                     "text": c.text,
+                    "context": chunk_context(company, filing, c.section),
                 }
                 for c in chunks
             ],

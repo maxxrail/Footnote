@@ -219,6 +219,20 @@ MUTS = [
         "Filing.form.in_(list(forms))",
         [T_S + "test_form_and_section_filters_ignore_case"],
     ),
+    (
+        "chunk header in the full-text index (text only)",
+        "analyst/db/models.py",
+        "Computed(\"to_tsvector('english', context || ' ' || text)\", persisted=True)",
+        "Computed(\"to_tsvector('english', text)\", persisted=True)",
+        [T_S + "test_company_name_found_through_the_chunk_header"],
+    ),
+    (
+        "chunk header embedded (text only)",
+        EMBED,
+        "(c.id, c.indexed_text)",
+        "(c.id, c.text)",
+        [T_S + "test_company_name_found_through_the_chunk_header"],
+    ),
     # -- index / embed / citations --------------------------------------------------------
     (
         "idempotent index (always reparse)",

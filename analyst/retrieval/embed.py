@@ -113,7 +113,11 @@ def embed_pending(
     done = 0
     for i in range(0, len(ids), batch_size):
         batch = ids[i : i + batch_size]
-        rows = session.execute(select(Chunk.id, Chunk.text).where(Chunk.id.in_(batch))).all()
+        # header + text: chunk text says "we", the header names the company and section
+        rows = [
+            (c.id, c.indexed_text)
+            for c in session.scalars(select(Chunk).where(Chunk.id.in_(batch)).order_by(Chunk.id))
+        ]
         vecs = embedder.embed_documents([t for _, t in rows])
         session.execute(
             update(Chunk),
