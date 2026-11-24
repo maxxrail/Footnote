@@ -134,3 +134,23 @@ Findings:
   on a larger set.
 - Some held-out labels may be narrow (INTU seasonality is also discussed in Item 8 notes,
   ADI's industrial mix in Item 1). Kept as committed.
+
+**Tried and dropped: collapsing near-duplicate hits** (2026-11-24). A company repeats
+passages across its 10-Ks and 10-Qs, so one idea for `orcl-capex` was to drop a hit when a
+better-ranked hit had the same company and section and word-set Jaccard ≥ 0.9 (threshold
+fixed from the corpus before any eval). A second held-out set
+(`tests/fixtures/retrieval_holdout2.yaml`, 10 queries) was committed before measuring it.
+Recall@5, open / filtered, 800 tokens:
+
+| Retriever | gold (15) before / after | held-out (10) before / after | held-out2 (10) before / after |
+|---|---|---|---|
+| vector-only | 15/15 → 15/15 | 10/10 → 10/10 | 10/10 → 10/10 |
+| full-text-only | 14/14 → 14/14 | 8/8 → 8/8 | 10/10 → 10/10 |
+| hybrid (RRF) | 14/14 → 14/14 | 10/10 → 10/10 | 10/10 → 10/10 |
+| hybrid + rerank | 15/15 → 15/15 | 10/10 → 10/10 | 10/10 → 10/10 |
+
+No change anywhere, and `orcl-capex` is still missed, so near-duplicates are not what
+buries it. **Reverted** (no measured gain, more code). Held-out2 is saturated (every leg
+10/10), so it can't separate retrievers; it's kept as a regression set. Across the 20
+held-out queries, hybrid is 20/20, vector 20/20, full-text 18/20. Further tuning on
+`orcl-capex` itself would fit the gold set, so it stops here.

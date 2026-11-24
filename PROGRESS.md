@@ -51,6 +51,7 @@
 - P2: Tests can't fall back to the default DB engine: an autouse fixture makes `get_engine()` raise, so code under test must be handed the test session.
 - P2: The spec mentions BeautifulSoup/lxml; the parser uses lxml only, so `beautifulsoup4` is not a dependency.
 - P2: Test DB isolation fix: tests create their tables with `checkfirst=False` in the throwaway schema and assert every table resolves there before truncating (see Notes for Maxx: incident).
+- P2: Near-duplicate collapsing (same company + section, Jaccard ≥ 0.9) was tried for `orcl-capex` and reverted: recall identical on all three sets (ADR 0004). A second held-out set (`retrieval_holdout2.yaml`) was committed first; every leg scores 10/10 on it.
 - P2: WFC and USB keep Risk Factors and MD&A in Exhibit 13, which isn't downloaded. Their Item 1A/7 are detected but short. Left as-is (ADR 0003 says how to fix).
 
 ## Acceptance results
@@ -204,6 +205,16 @@ $ uv run python -m analyst.retrieval.evaluate --rerank --misses --gold tests/fix
 full-text-only: open missed ['intu-seasonality', 'adi-industrial']; filtered missed ['intu-seasonality', 'adi-industrial']
 ```
 (Held-out timings are higher because that run overlapped the 450-token embedding job.)
+
+Second held-out set (`retrieval_holdout2.yaml`, 10 queries, committed before measuring any fix), 2026-11-24:
+```
+| vector-only | 1.00 (10/10) | 1.00 (10/10) | 3.57 |
+| full-text-only | 1.00 (10/10) | 1.00 (10/10) | 0.18 |
+| hybrid (RRF) | 1.00 (10/10) | 1.00 (10/10) | 0.16 |
+| hybrid + rerank | 1.00 (10/10) | 1.00 (10/10) | 8.10 |
+```
+Across both held-out sets (20 queries): hybrid 20/20, vector 20/20, full-text 18/20. Near-duplicate
+collapsing was tried against `orcl-capex` and changed no number on any set, so it was reverted (ADR 0004).
 
 "full-text-only" is the spec's "BM25-only" leg: Postgres full-text with OR-ed terms and BM25 IDF
 weights, not true BM25 (ADR 0004). Hybrid's gold miss is `orcl-capex`: the full-text leg ranks the
