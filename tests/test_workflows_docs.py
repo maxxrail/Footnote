@@ -132,7 +132,12 @@ def test_tearsheet_writes_pdf_markdown_and_chart(ctx: Context) -> None:
     )
     assert "| Operating margin [^" in md and "30.0%" in md  # 450 / 1,500
     assert "Chip Corp designs products and sells them worldwide [^1]." in md
-    assert "- Export controls could restrict sales [^2]." in md
+    # footnotes in reading order: business [^1], 9 table rows [^2]-[^10], then risks
+    assert "| Revenue [^2] |" in md
+    assert "- Export controls could restrict sales [^11]." in md
+    assert re.search(r"\| Valuation \[\^12\] \|", md)
+    valuation_note = md.split("[^12]: ", 1)[1].splitlines()[0]
+    assert "net income FY2025" in valuation_note and "us-gaap:NetIncomeLoss" in valuation_note
     assert "| EV/EBITDA | 9.3x | 6.2x |" in md  # CHIP vs peer median (FAB)
     sources = md.split("## Sources", 1)[1]
     assert "[^1]: CHIP 10-K filed 2026-02-15, Item 1 (Business)" in sources
@@ -293,3 +298,72 @@ def test_new_paragraphs_ignores_near_copies() -> None:
     edited = ("Our supply chain depends on a small number of foundries in one region!", 0, 1)
     fresh = (NEW_RISK, 0, 1)
     assert new_paragraphs([edited, fresh], annual) == [fresh]
+
+
+def test_a_10q_paragraph_cut_from_a_longer_10k_paragraph_is_not_new() -> None:
+    # 10-Q text is often cut at page breaks: a piece of a 10-K paragraph is not a change.
+    long_10k = (
+        "Threat actors use social engineering and AI-assisted techniques to induce our employees "
+        "to grant access, and they also exploit vulnerabilities in third-party software we use."
+    )
+    piece = (
+        "Threat actors use social engineering and AI-assisted techniques to induce our "
+        "employees to grant access,",
+        0,
+        1,
+    )
+    assert new_paragraphs([piece], [(long_10k, 0, 1)], annual_text=long_10k) == []
+    assert new_paragraphs([(NEW_RISK, 0, 1)], [(long_10k, 0, 1)], annual_text=long_10k) != []
+
+
+def test_quarter_comes_from_the_10q_period_when_its_revenue_is_not_tagged(
+    ctx: Context, session_factory: SessionFactory
+) -> None:
+    """Citigroup-style: the latest 10-Q reports no revenue fact. The brief must still be
+    about that 10-Q's quarter (from its period of report), never an older quarter."""
+    from sqlalchemy import delete, update
+
+    with session_factory() as s:
+        s.execute(
+            delete(Fact).where(
+                Fact.accession == "0000000001-25-000013", Fact.concept == "us-gaap:Revenues"
+            )
+        )
+        s.execute(
+            update(Filing)
+            .where(Filing.accession == "0000000001-25-000013")
+            .values(period_of_report=dt.date(2025, 9, 30))
+        )
+    ctx.llm = ScriptedLLM(
+        [lambda msgs: [submit("- Accelerator demand [^1].")], earnings_llm().turns[1]]
+    )
+    res = Earnings().run({"ticker": "CHIP"}, ctx)
+    assert res.status == "succeeded", res.error
+    md = res.files[0].read_text(encoding="utf-8")
+    assert "FY2025 Q3 earnings brief" in md and "compared with FY2024 Q3" in md
+    assert re.search(r"\| Revenue \[\^\d+\] \| n/a \| 300 \|", md)
+
+
+def test_quarter_unknown_is_refused(ctx: Context, session_factory: SessionFactory) -> None:
+    from sqlalchemy import delete
+
+    with session_factory() as s:
+        s.execute(
+            delete(Fact).where(
+                Fact.accession == "0000000001-25-000013", Fact.concept == "us-gaap:Revenues"
+            )
+        )
+    res = Earnings().run({"ticker": "CHIP"}, ctx)
+    assert res.status == "failed" and "can't tell which quarter" in (res.error or "")
+
+
+def test_earnings_footnotes_cite_full_xbrl_facts(ctx: Context) -> None:
+    ctx.llm = earnings_llm()
+    md = Earnings().run({"ticker": "CHIP"}, ctx).files[0].read_text(encoding="utf-8")
+    first = md.split("[^1]: ", 1)[1].splitlines()[0]
+    assert "us-gaap:Revenues 2025-07-01..2025-09-30 = 380000000 USD" in first
+    assert "(10-Q 0000000001-25-000013, fact" in first
+    margin = next(
+        ln for ln in md.splitlines() if ln.startswith("[^") and "Operating margin =" in ln
+    )
+    assert "us-gaap:OperatingIncomeLoss" in margin and "us-gaap:Revenues" in margin

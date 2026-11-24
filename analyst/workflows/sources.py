@@ -7,6 +7,7 @@ citation here resolves with `analyst.retrieval.citation.verify`.
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Sequence
 
 from sqlalchemy import func, select
@@ -31,6 +32,25 @@ def latest_filing(s: Session, cik: int, forms: Sequence[str], offset: int = 0) -
         .offset(offset)
         .limit(1)
     ).first()
+
+
+def latest_filing_with_section(
+    s: Session,
+    cik: int,
+    forms: Sequence[str],
+    section: str,
+    filed_on_or_before: dt.date | None = None,
+) -> Filing | None:
+    """The latest filing of these forms that has `section` detected (skips, e.g., a 10-K/A
+    that only amends Part III and has no Item 1A)."""
+    q = (
+        select(Filing)
+        .join(FilingSection, FilingSection.accession == Filing.accession)
+        .where(Filing.cik == cik, Filing.form.in_(list(forms)), FilingSection.section == section)
+    )
+    if filed_on_or_before is not None:
+        q = q.where(Filing.filed_at <= filed_on_or_before)
+    return s.scalars(q.order_by(Filing.filed_at.desc(), Filing.accession.desc()).limit(1)).first()
 
 
 def section_span(s: Session, accession: str, section: str) -> tuple[int, int] | None:

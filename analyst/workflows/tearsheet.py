@@ -38,7 +38,7 @@ from analyst.workflows.report import (
     md_inline_to_rl,
     pdf_styles,
 )
-from analyst.workflows.sources import latest_filing, section_chunks, to_excerpt
+from analyst.workflows.sources import latest_filing_with_section, section_chunks, to_excerpt
 
 YEARS = 5
 ROWS = [
@@ -73,7 +73,8 @@ def _company(state: State, ctx: Context) -> State:
         co = s.scalar(select(Company).where(Company.ticker == t))
         if co is None:
             raise ToolError(f"{t} is in the universe but has no data loaded")
-        tenk = latest_filing(s, co.cik, ["10-K", "10-K/A"])
+        tenk = latest_filing_with_section(s, co.cik, ["10-K", "10-K/A"], "Item 1")
+        tenk_risks = latest_filing_with_section(s, co.cik, ["10-K", "10-K/A"], "Item 1A")
         state["company"] = {
             "cik": co.cik,
             "ticker": co.ticker,
@@ -87,6 +88,7 @@ def _company(state: State, ctx: Context) -> State:
             if tenk
             else None
         )
+        state["tenk_risks"] = {"accession": tenk_risks.accession} if tenk_risks else None
     return state
 
 
@@ -198,10 +200,11 @@ def _valuation(state: State, ctx: Context) -> State:
 
 
 def _excerpts(state: State, ctx: Context, section: str, n: int) -> list[Any]:
-    if state["tenk"] is None:
+    filing = state["tenk_risks"] if section == "Item 1A" else state["tenk"]
+    if filing is None:
         return []
     with ctx.session_factory() as s:
-        cites = section_chunks(s, state["tenk"]["accession"], section, n)
+        cites = section_chunks(s, filing["accession"], section, n)
         return [to_excerpt(s, c) for c in cites]
 
 
@@ -216,8 +219,11 @@ def _business(state: State, ctx: Context) -> State:
         return state
     state["business"] = ctx.ask(
         f"In 3 or 4 sentences, describe what {name} does: its main products or services, "
-        "its segments and who its customers are. Use the provided Item 1 excerpts; cite each "
-        "sentence. No numbers unless the excerpt states them.",
+        "its segments and who its customers are. Use the provided Item 1 excerpts, and "
+        f"search_filings (ticker {state['company']['ticker']}, section 'Item 1', form 10-K) "
+        "for anything they don't cover; cite each sentence. Describe only what the filings "
+        "say: if something isn't there, leave it out rather than commenting on the sources. "
+        "No numbers unless a filing states them.",
         state,
         excerpts,
     )
@@ -245,6 +251,8 @@ def _risks(state: State, ctx: Context) -> State:
 
 
 def _write(state: State, ctx: Context) -> State:
+    with ctx.session_factory() as s:
+        state["val_facts"] = comps_wf.fact_details(s, sorted(state["comps"]["rows"][0].fact_ids))
     notes = Footnotes()
     md = build_markdown(state, notes)
     t = state["company"]["ticker"]
@@ -303,12 +311,27 @@ def financial_rows(state: State, notes: Footnotes) -> list[list[str]]:
 def valuation_rows(state: State, notes: Footnotes) -> list[list[str]]:
     target = state["comps"]["rows"][0]
     stats = state["comps"]["stats"]
-    i = target.inputs
-    parts = [o.label for o in (i["price"], i["shares"], i["total_debt"], i["cash"]) if o]
+    details = state.get("val_facts", {})
+    parts = []
+    for key, op in target.inputs.items():
+        if op is None:
+            parts.append(f"{key}: not available")
+            continue
+        basis = {
+            "revenue": "revenue",
+            "operating_income": "ebitda",
+            "d_and_a": "ebitda",
+            "net_income": "net_income",
+        }.get(key)
+        tag = f" [{target.basis[basis]}]" if basis and basis in target.basis else ""
+        cited = "; ".join(details[f].describe() for f in op.fact_ids if f in details)
+        src = op.detail if op.source == "price" else cited
+        parts.append(f"{op.label}{tag}: {src}")
     ref = notes.add(
-        "Valuation: comps workflow (analyst.workflows.comps), same inputs as "
-        f"comps_{target.ticker}_*.xlsx: "
-        + "; ".join(parts)
+        "Valuation: comps workflow (analyst.workflows.comps), the same inputs as "
+        f"comps_{target.ticker}_*.xlsx; EV = market cap + debt - cash, EBITDA = operating "
+        "income + D&A, P/E = market cap / net income. Inputs: "
+        + " | ".join(parts)
         + ". Peers: "
         + ", ".join(r.ticker for r in state["comps"]["rows"][1:])
         + (". Notes: " + "; ".join(target.notes) if target.notes else "")
@@ -340,9 +363,10 @@ def _md_table(rows: list[list[str]]) -> str:
 
 def _sections(state: State, notes: Footnotes) -> dict[str, Any]:
     c = state["company"]
+    # Footnotes are numbered in reading order: business, financials, risks, valuation.
     business = agent_section(state.get("business"), notes, state.get("business_note", ""))
-    risks = agent_section(state.get("risks"), notes, state.get("risks_note", ""))
     fin_rows = financial_rows(state, notes)
+    risks = agent_section(state.get("risks"), notes, state.get("risks_note", ""))
     val_rows = valuation_rows(state, notes)
     tenk = state["tenk"]
     price = state["comps"]["rows"][0].inputs["price"]

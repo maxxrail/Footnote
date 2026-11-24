@@ -53,7 +53,7 @@ class Context:
     def ask(self, question: str, state: State, context: Sequence[Excerpt] = ()) -> Answer:
         """Run the analyst agent (an agent step). Its cost and trace go into the run."""
         if self.llm is None:
-            raise RuntimeError("this step needs an LLM; pass --no-agent to skip agent steps")
+            raise RuntimeError("this step needs an LLM (ctx.llm is None)")
         box = self.toolbox()
         answer = run_agent(question, self.llm, box, context=context)
         state.setdefault("_answers", []).append(answer)
@@ -104,58 +104,69 @@ class Workflow:
             run_id = row.id
         state: State = {"inputs": args}
         records: list[StepRecord] = []
-        cost: Decimal | None = Decimal(0)
-        error = None
-        for step in self.steps(args):
-            t0 = time.perf_counter()
-            before = len(state.get("_answers", []))
-            try:
-                state = step.fn(state, ctx)
-            except Exception as exc:
-                error = f"{step.name}: {type(exc).__name__}: {exc}"
+        error: str | None = None
+        files: list[Path] = []
+        summary = ""
+        try:
+            for step in self.steps(args):
+                t0 = time.perf_counter()
+                before = len(state.get("_answers", []))
+                try:
+                    state = step.fn(state, ctx)
+                except Exception as exc:
+                    error = f"{step.name}: {type(exc).__name__}: {exc}"
+                    records.append(
+                        StepRecord(
+                            name=step.name,
+                            kind=step.kind,
+                            ms=int((time.perf_counter() - t0) * 1000),
+                            cost_usd=_answers_cost(state.get("_answers", [])[before:]),
+                            error=traceback.format_exc(limit=3),
+                        )
+                    )
+                    break
                 records.append(
                     StepRecord(
                         name=step.name,
                         kind=step.kind,
                         ms=int((time.perf_counter() - t0) * 1000),
-                        error=traceback.format_exc(limit=3),
+                        cost_usd=_answers_cost(state.get("_answers", [])[before:]),
                     )
                 )
-                break
-            step_cost = _answers_cost(state.get("_answers", [])[before:])
-            if step_cost is None or cost is None:
-                cost = None
-            else:
-                cost += step_cost
-            records.append(
-                StepRecord(
-                    name=step.name,
-                    kind=step.kind,
-                    ms=int((time.perf_counter() - t0) * 1000),
-                    cost_usd=step_cost,
-                )
-            )
-        files, summary = ([], error or "") if error else self.outputs(state)
-        result = Result(
+            if error is None:
+                try:
+                    files, summary = self.outputs(state)
+                except Exception as exc:
+                    error = f"outputs: {type(exc).__name__}: {exc}"
+            if error is not None:
+                summary = error
+        finally:
+            # Always store the run, failed or not, with the cost of every agent call made.
+            cost = _answers_cost(state.get("_answers", []))
+            status: Literal["succeeded", "failed"] = "succeeded" if error is None else "failed"
+            if error is None and len(records) < len(self.steps(args)):
+                status, error = "failed", "interrupted"
+            with ctx.session_factory() as s:
+                stored = s.get(WorkflowRun, run_id)
+                assert stored is not None
+                stored.status = status
+                stored.outputs = {"files": [str(f) for f in files], "summary": summary}
+                stored.trace = {
+                    "steps": [r.model_dump(mode="json") for r in records],
+                    "agent_runs": [
+                        a.trace.model_dump(mode="json") for a in state.get("_answers", [])
+                    ],
+                }
+                stored.cost_usd = cost
+        return Result(
             run_id=run_id,
-            status="failed" if error else "succeeded",
+            status=status,
             files=files,
             summary=summary,
             steps=records,
             cost_usd=cost,
             error=error,
         )
-        with ctx.session_factory() as s:
-            stored = s.get(WorkflowRun, run_id)
-            assert stored is not None
-            stored.status = result.status
-            stored.outputs = {"files": [str(f) for f in files], "summary": summary}
-            stored.trace = {
-                "steps": [r.model_dump(mode="json") for r in records],
-                "agent_runs": [a.trace.model_dump(mode="json") for a in state.get("_answers", [])],
-            }
-            stored.cost_usd = cost
-        return result
 
 
 def _answers_cost(answers: Sequence[Answer]) -> Decimal | None:

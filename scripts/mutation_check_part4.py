@@ -41,7 +41,7 @@ MUTS = [
     (
         "NM rule: missing inputs give NM, not an error (no ISNUMBER guard)",
         COMPS,
-        "3: f'=IF(AND({num(p, sh)}),{p}*{sh},\"NM\")',",
+        '3: f\'=IF(AND({num(p, sh)}),IF(AND({p}>0,{sh}>0),{p}*{sh},"NM"),"NM")\',',
         "3: f'={p}*{sh}',",
         [T_C + "test_nm_rule_for_missing_and_negative_denominators"],
     ),
@@ -80,13 +80,34 @@ MUTS = [
         "value = operating_income.value - d_and_a.value",
         [T_C + "test_formulas_match_analyst_metrics_for_every_cell"],
     ),
+    (
+        "only functions Excel knows without an _xlfn. prefix (QUARTILE.INC)",
+        COMPS,
+        '    ("25th percentile", "QUARTILE({r},1)", "q1"),',
+        '    ("25th percentile", "QUARTILE.INC({r},1)", "q1"),',
+        [T_C + "test_every_function_is_one_excel_knows"],
+    ),
+    (
+        "duplicate peers count once (counted twice)",
+        COMPS,
+        "        peers = [p for p in dict.fromkeys(given) if p != args.ticker]  # no duplicates",
+        "        peers = [p for p in given if p != args.ticker]",
+        [T_C + "test_duplicate_peers_count_once"],
+    ),
+    (
+        "mixed bases are noted on the Comps sheet (silent)",
+        COMPS,
+        '            if len({rev_basis, ebitda_basis, ni_basis} - {"none"}) > 1:',
+        "            if False:",
+        [T_C + "test_mixed_bases_are_noted_on_the_comps_sheet"],
+    ),
     # -- framework ---------------------------------------------------------------------------
     (
         "the run's final status is stored (stays 'running')",
         BASE,
-        "            stored.status = result.status\n",
+        "                stored.status = status\n",
         "",
-        [T_C + "test_run_is_stored"],
+        [T_C + "test_run_is_stored", T_C + "test_failed_run_is_stored_as_failed"],
     ),
     (
         "workflow source material is citable (not in the post-check's outputs)",
@@ -153,6 +174,27 @@ MUTS = [
         "        new = [p for p in new if not NO_CHANGE.search(p[0])]",
         "        new = list(new)",
         [T_D + "test_earnings_unchanged_risks_cite_the_10q_without_an_agent"],
+    ),
+    (
+        "a piece of a 10-K paragraph is not new (only whole-paragraph matches)",
+        EARN,
+        "        if q in exact or q in whole:",
+        "        if q in exact:",
+        [T_D + "test_a_10q_paragraph_cut_from_a_longer_10k_paragraph_is_not_new"],
+    ),
+    (
+        "the quarter is the 10-Q's own (fall back to the latest series point)",
+        EARN,
+        "    elif tenq.period_of_report is not None:\n        fy, fq = fiscal_period(tenq.period_of_report, fye)",
+        "    elif series['revenue']:\n        fy, fq = series['revenue'][-1].fiscal_year, series['revenue'][-1].fiscal_quarter",
+        [T_D + "test_quarter_comes_from_the_10q_period_when_its_revenue_is_not_tagged"],
+    ),
+    (
+        "earnings footnotes cite full XBRL facts (labels only)",
+        EARN,
+        "        cited = [details[f].describe() for f in o.fact_ids if f in details]",
+        "        cited = []",
+        [T_D + "test_earnings_footnotes_cite_full_xbrl_facts"],
     ),
 ]
 

@@ -31,15 +31,17 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 
 from analyst.agent.tools import Excerpt, ToolError, display, load_universe
-from analyst.db.models import Company, Filing, FilingText
-from analyst.edgar.concepts import SeriesPoint
+from analyst.db.models import Company
+from analyst.edgar.concepts import SeriesPoint, fiscal_period
 from analyst.metrics import finance as fin
 from analyst.metrics.computed import Computed, Operand
 from analyst.metrics.quarters import DerivedPoint, quarterly_series
 from analyst.workflows.base import Context, State, Step, Workflow
+from analyst.workflows.comps import fact_details
 from analyst.workflows.report import Footnotes, agent_section
 from analyst.workflows.sources import (
     latest_filing,
+    latest_filing_with_section,
     section_chunks,
     section_text,
     span_citation,
@@ -93,17 +95,10 @@ def _quarter(state: State, ctx: Context) -> State:
         if tenq is None:
             raise ToolError(f"no 10-Q text for {t} in the corpus")
         series = {k: quarterly_series(s, co.cik, k) for k, _ in METRICS}
-        prior_10k = s.scalars(
-            select(Filing)
-            .join(FilingText, FilingText.accession == Filing.accession)
-            .where(
-                Filing.cik == co.cik,
-                Filing.form.in_(["10-K", "10-K/A"]),
-                Filing.filed_at <= tenq.filed_at,
-            )
-            .order_by(Filing.filed_at.desc())
-            .limit(1)
-        ).first()
+        prior_10k = latest_filing_with_section(
+            s, co.cik, ["10-K", "10-K/A"], "Item 1A", tenq.filed_at
+        )
+        fye = co.fiscal_year_end
         state["company"] = {"cik": co.cik, "ticker": co.ticker, "name": co.name}
         state["tenq"] = {"accession": tenq.accession, "filed_at": tenq.filed_at, "url": tenq.url}
         state["tenk"] = (
@@ -111,10 +106,19 @@ def _quarter(state: State, ctx: Context) -> State:
             if prior_10k
             else None
         )
-    current = _reported_by(series["revenue"], tenq.accession) or _latest(series["revenue"])
-    if current is None:
-        raise ToolError(f"no quarterly revenue for {t}")
-    fy, fq = current.fiscal_year, current.fiscal_quarter
+    # The quarter is the one the latest 10-Q reports: its own revenue point, else its period
+    # of report. Never fall back to some other quarter (an old derived Q4 would be compared
+    # while citing this 10-Q's MD&A).
+    current = _reported_by(series["revenue"], tenq.accession)
+    if current is not None:
+        fy, fq = current.fiscal_year, current.fiscal_quarter
+    elif tenq.period_of_report is not None:
+        fy, fq = fiscal_period(tenq.period_of_report, fye)
+    else:
+        raise ToolError(
+            f"can't tell which quarter {t}'s latest 10-Q ({tenq.accession}) reports: no revenue "
+            "fact and no period of report"
+        )
     state["label"] = f"FY{fy} Q{fq}"
     state["prior_label"] = f"FY{fy - 1} Q{fq}"
     state["points"] = {k: (_at(pts, fy, fq), _at(pts, fy - 1, fq)) for k, pts in series.items()}
@@ -124,10 +128,6 @@ def _quarter(state: State, ctx: Context) -> State:
 def _reported_by(points: list[Point], accession: str) -> Point | None:
     mine = [p for p in points if isinstance(p, SeriesPoint) and p.accession == accession]
     return max(mine, key=lambda p: p.period_end) if mine else None
-
-
-def _latest(points: list[Point]) -> Point | None:
-    return points[-1] if points else None
 
 
 def _at(points: list[Point], fy: int, fq: int | None) -> Point | None:
@@ -254,15 +254,21 @@ def _norm(text: str) -> str:
 
 
 def new_paragraphs(
-    quarter: list[tuple[str, int, int]], annual: list[tuple[str, int, int]]
+    quarter: list[tuple[str, int, int]],
+    annual: list[tuple[str, int, int]],
+    annual_text: str = "",
 ) -> list[tuple[str, int, int]]:
-    """Quarter paragraphs with no close match (ratio >= NEW_PARAGRAPH_RATIO) in the annual."""
+    """Quarter paragraphs that aren't in the annual. A paragraph is not new if its text
+    appears anywhere in the annual (10-Q text is often cut at page breaks, so it can be a
+    piece of a longer 10-K paragraph) or a 10-K paragraph matches it closely (difflib
+    ratio >= NEW_PARAGRAPH_RATIO)."""
     annual_norm = [_norm(p) for p, _, _ in annual]
     exact = set(annual_norm)
+    whole = _norm(annual_text) if annual_text else " ".join(annual_norm)
     out = []
     for para, start, end in quarter:
         q = _norm(para)
-        if q in exact:
+        if q in exact or q in whole:
             continue
         best = 0.0
         for a in annual_norm:
@@ -285,13 +291,24 @@ def _risk_changes(state: State, ctx: Context) -> State:
     with ctx.session_factory() as s:
         q = section_text(s, acc_q, RISKS_10Q)
         if q is None:
-            state["risk_result"] = {"kind": "none", "note": "The 10-Q has no Part II, Item 1A."}
+            state["risk_result"] = {
+                "kind": "none",
+                "note": "No Part II, Item 1A section was found in the 10-Q's text (it may be "
+                "missing or the parser may have missed its heading); risk changes not assessed.",
+            }
             return state
         q_text, q_start = q
         q_paras = _paragraphs(q_text, q_start)
         k = section_text(s, state["tenk"]["accession"], "Item 1A") if state["tenk"] else None
-        k_paras = _paragraphs(*k) if k else []
-        new = new_paragraphs(q_paras, k_paras) if k else q_paras
+        if k is None:
+            state["risk_result"] = {
+                "kind": "none",
+                "note": "No earlier 10-K with an Item 1A was found, so there is nothing to "
+                "compare the 10-Q's risk factors with.",
+            }
+            return state
+        k_paras = _paragraphs(*k)
+        new = new_paragraphs(q_paras, k_paras, annual_text=k[0])
         # "There have been no material changes to the risk factors..." is new text relative
         # to the 10-K but says nothing changed. Unchanged = no new paragraph but such statements.
         statements = [p for p in new if NO_CHANGE.search(p[0])]
@@ -327,6 +344,11 @@ def _risk_changes(state: State, ctx: Context) -> State:
 
 
 def _write(state: State, ctx: Context) -> State:
+    ids = sorted(
+        {f for r in state["deltas"] for o in (r["current"], r["prior"]) if o for f in o.fact_ids}
+    )
+    with ctx.session_factory() as s:
+        state["facts"] = fact_details(s, ids)
     notes = Footnotes()
     md = build_markdown(state, notes)
     ctx.out_dir.mkdir(parents=True, exist_ok=True)
@@ -364,8 +386,13 @@ def _row_note(r: dict[str, Any], state: State) -> str:
         src = f"{r['label']} = line / revenue for each quarter; change = current - prior"
     else:
         src = f"{r['label']} growth = (current - prior) / prior"
-    facts = "; ".join(f"{o.label}: {o.source} {o.detail}" for o in ops)
-    return f"{src} (analyst.metrics). {facts}"
+    details = state.get("facts", {})
+    parts = []
+    for o in ops:
+        cited = [details[f].describe() for f in o.fact_ids if f in details]
+        how = f" = {o.detail}" if o.source in ("derived", "computed") else ""
+        parts.append(f"{o.label}{how}: " + "; ".join(cited))
+    return f"{src} (analyst.metrics). " + " | ".join(parts)
 
 
 def build_markdown(state: State, notes: Footnotes) -> str:

@@ -208,3 +208,69 @@ def test_run_is_stored(ctx: Context, session_factory: SessionFactory) -> None:
         ]
         assert row.cost_usd == 0
     assert "EV/Revenue 3.2x vs peer median 1.6x" in res.summary
+
+
+def test_every_function_is_one_excel_knows(ctx: Context) -> None:
+    """openpyxl writes formulas as text; a function Excel stores with an `_xlfn.` prefix
+    (QUARTILE.INC, ...) would show #NAME? in Excel, hidden by IFERROR. Every function used
+    must be in openpyxl's list of plain Excel functions."""
+    import re
+
+    from openpyxl.utils import FORMULAE
+
+    (path,) = run(ctx).files
+    wb = openpyxl.load_workbook(path)
+    used = set()
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for c in row:
+                if isinstance(c.value, str) and c.value.startswith("="):
+                    used |= set(re.findall(r"([A-Z][A-Z0-9.]*)\(", c.value))
+    assert used and used <= FORMULAE, used - FORMULAE
+
+
+def test_every_input_value_has_a_citation_comment(ctx: Context) -> None:
+    (path,) = run(ctx).files
+    ws = openpyxl.load_workbook(path)["Inputs"]
+    for row in ws.iter_rows(min_row=2, min_col=3, max_col=10):
+        for c in row:
+            if c.value is not None:
+                assert c.comment is not None and c.comment.text, c.coordinate
+
+
+def test_duplicate_peers_count_once(ctx: Context) -> None:
+    (path,) = run(ctx, peers=["FAB", "FAB", "fab"]).files
+    v = recalc(path)
+    comps = openpyxl.load_workbook(path)["Comps"]
+    col_a = [comps.cell(row=r, column=1).value for r in range(2, comps.max_row + 1)]
+    assert col_a.count("FAB") == 1
+    labels = {comps.cell(row=r, column=2).value: r for r in range(1, comps.max_row + 1)}
+    assert v[f"Comps!H{labels['n (peers with a value)']}"] == 1
+
+
+def test_no_peers_and_all_nm_columns_show_nm(ctx: Context) -> None:
+    (path,) = run(ctx, peers=[]).files  # no peers at all
+    comps = openpyxl.load_workbook(path)["Comps"]
+    labels = {comps.cell(row=r, column=2).value: r for r in range(1, comps.max_row + 1)}
+    assert comps[f"H{labels['Median']}"].value == "NM"
+    (path,) = run(ctx, peers=["BANK"]).files  # one peer, all NM
+    v = recalc(path)
+    comps = openpyxl.load_workbook(path)["Comps"]
+    labels = {comps.cell(row=r, column=2).value: r for r in range(1, comps.max_row + 1)}
+    for stat in ("Median", "Mean", "25th percentile", "75th percentile"):
+        assert v[f"Comps!H{labels[stat]}"] == "NM", stat
+    assert v[f"Comps!H{labels['n (peers with a value)']}"] == 0
+
+
+def test_mixed_bases_are_noted_on_the_comps_sheet(ctx: Context) -> None:
+    (path,) = run(ctx).files
+    notes = openpyxl.load_workbook(path)["Comps"]["K2"].value  # CHIP: revenue LTM, EBITDA FY
+    assert "bases differ: revenue LTM to 2025-12-31, EBITDA FY2025" in notes
+
+
+def test_failed_run_is_stored_as_failed(ctx: Context, session_factory: SessionFactory) -> None:
+    res = Comps().run({"ticker": "TSLA"}, ctx)
+    with session_factory() as s:
+        row = s.get(WorkflowRun, res.run_id)
+        assert row is not None and row.status == "failed"
+        assert row.trace is not None and row.trace["steps"][-1]["error"]

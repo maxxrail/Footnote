@@ -18,7 +18,8 @@ Steps (all deterministic):
    - `Inputs`: raw values in blue, each with a cell comment citing its facts or price row.
    - `Comps`: market cap, EV, EBITDA and multiples as live formulas on `Inputs`, in black.
      Multiples are "NM" when an input is missing or a denominator is not positive. The
-     median, mean, 25th and 75th percentiles (QUARTILE.INC) are over the peers only; Excel
+     median, mean, 25th and 75th percentiles (QUARTILE, which Excel defines as QUARTILE.INC;
+     the .INC name would need an `_xlfn.` prefix in the file) are over the peers only; Excel
      skips "NM" text, and `n` counts the peers with a value.
    - `Sources`: every filing used, with its URL, and the price file.
 
@@ -75,8 +76,8 @@ HEADER_FILL = PatternFill("solid", fgColor="DDEBF7")
 STATS = [
     ("Median", "MEDIAN({r})", "median"),
     ("Mean", "AVERAGE({r})", "mean"),
-    ("25th percentile", "QUARTILE.INC({r},1)", "q1"),
-    ("75th percentile", "QUARTILE.INC({r},3)", "q3"),
+    ("25th percentile", "QUARTILE({r},1)", "q1"),
+    ("75th percentile", "QUARTILE({r},3)", "q3"),
 ]
 MULTIPLES = ["ev_to_revenue", "ev_to_ebitda", "pe"]
 
@@ -116,7 +117,8 @@ def resolve(state: State, ctx: Context) -> State:
     if args.ticker not in universe:
         raise ToolError(f"{args.ticker} is not in the covered universe")
     if args.peers is not None:
-        peers = [p.strip().upper() for p in args.peers if p.strip().upper() != args.ticker]
+        given = [p.strip().upper() for p in args.peers if p.strip()]
+        peers = [p for p in dict.fromkeys(given) if p != args.ticker]  # no duplicates
         unknown = [p for p in peers if p not in universe]
         if unknown:
             raise ToolError(f"peers not in the covered universe: {unknown}")
@@ -160,6 +162,11 @@ def gather(state: State, ctx: Context) -> State:
             if price is None:
                 row.notes.append("no price in the price file")
             row.notes += list(d.stale.values())
+            if len({rev_basis, ebitda_basis, ni_basis} - {"none"}) > 1:
+                row.notes.append(
+                    f"bases differ: revenue {rev_basis}, EBITDA {ebitda_basis}, "
+                    f"net income {ni_basis}"
+                )
             rows.append(row)
     state["rows"] = rows
     return state
@@ -200,7 +207,7 @@ def write(state: State, ctx: Context) -> State:
     ctx.out_dir.mkdir(parents=True, exist_ok=True)
     path = ctx.out_dir / f"comps_{args.ticker}_{ctx.today.isoformat()}.xlsx"
     with ctx.session_factory() as s:
-        facts = _fact_details(s, sorted({f for r in state["rows"] for f in r.fact_ids}))
+        facts = fact_details(s, sorted({f for r in state["rows"] for f in r.fact_ids}))
     wb = build_workbook(state["rows"], facts, ctx.today)
     wb.save(path)
     state["path"] = path
@@ -249,9 +256,18 @@ class FactDetail:
     filed_at: dt.date
     url: str
     ticker: str
+    unit: str = ""
+
+    def describe(self) -> str:
+        """Concept, period, value, unit, form, accession and fact id: one XBRL citation."""
+        unit = f" {self.unit}" if self.unit else ""
+        return (
+            f"{self.concept} {self.period} = {self.value}{unit} "
+            f"({self.form} {self.accession}, fact {self.fact_id})"
+        )
 
 
-def _fact_details(s: Session, ids: list[int]) -> dict[int, FactDetail]:
+def fact_details(s: Session, ids: list[int]) -> dict[int, FactDetail]:
     if not ids:
         return {}
     rows = s.execute(
@@ -271,6 +287,7 @@ def _fact_details(s: Session, ids: list[int]) -> dict[int, FactDetail]:
             fl.filed_at,
             fl.url,
             co.ticker,
+            f.unit,
         )
         for f, fl, co in rows
     }
@@ -365,7 +382,7 @@ def build_workbook(rows: list[Row], facts: dict[int, FactDetail], today: dt.date
             ref("net_income", r),
         )
         formulas = {
-            3: f'=IF(AND({num(p, sh)}),{p}*{sh},"NM")',
+            3: f'=IF(AND({num(p, sh)}),IF(AND({p}>0,{sh}>0),{p}*{sh},"NM"),"NM")',
             4: f'=IF(AND({num(f"C{r}", debt, cash)}),C{r}+{debt}-{cash},"NM")',
             5: f'=IF(ISNUMBER({rev}),{rev},"NM")',
             6: f'=IF(AND({num(oi, da)}),{oi}+{da},"NM")',
